@@ -23,7 +23,7 @@
 //
 
 //TODO:
-// OTA updates
+// OTA updates - Testing
 // batt_level
 // device posts X
 // wifi_level X
