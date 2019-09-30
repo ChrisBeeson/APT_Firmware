@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"name": "190930-171843-d1",
+			"path": "/Users/Chris/Documents/PlatformIO/Projects/190930-171843-d1"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"vector": "cpp"
+		},
+		"terminal.integrated.env.osx": {
+			"PATH": "/Users/Chris/.platformio/penv/bin:/Users/Chris/.platformio/penv:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/share/dotnet:~/.dotnet/tools:/Library/Frameworks/Mono.framework/Versions/Current/Commands:/Users/Chris/Dropbox/Chris/Projects/Flutter_Dev/flutter/bin/",
+			"PLATFORMIO_CALLER": "vscode"
+		}
+	}
+}
