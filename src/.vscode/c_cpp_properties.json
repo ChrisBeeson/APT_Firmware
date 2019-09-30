@@ -1,0 +1,25 @@
+{
+    "configurations": [
+        {
+            "name": "Mac",
+            "includePath": [
+                "/Users/Chris/Documents/Arduino/libraries/OneWire",
+                "/Users/Chris/Documents/Arduino/libraries/ArduinoJson/src",
+                "/Users/Chris/Documents/Arduino/libraries/DallasTemperature",
+                "/Applications/Arduino.app/Contents/Java/libraries/WiFi/src",
+                "/Users/Chris/Library/Arduino15/packages/esp8266/tools/**",
+                "/Users/Chris/Library/Arduino15/packages/esp8266/hardware/esp8266/2.5.2/**"
+            ],
+            "forcedInclude": [],
+            "macFrameworkPath": [
+                "/System/Library/Frameworks",
+                "/Library/Frameworks"
+            ],
+            "intelliSenseMode": "clang-x64",
+            "compilerPath": "/usr/bin/clang",
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}
