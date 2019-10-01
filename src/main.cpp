@@ -19,7 +19,7 @@
 #include <string.h>
 
 //
-// This is the ANDRIS wifi battery powered floating water temperature sensor.
+// This is the ANDRIS wifi battery powered floating water temperature sensor 2019.
 //
 
 //TODO:
@@ -34,6 +34,7 @@
 // Hardware
 #define TEMP_SENSOR_BUS D3
 #define ANALOG_BUS A0
+#define DEVICE_TYPE = "APT2019"
 
 OneWire oneWire(TEMP_SENSOR_BUS);
 DallasTemperature sensors(&oneWire);
@@ -41,7 +42,7 @@ DallasTemperature sensors(&oneWire);
 double currentTemp = 0.0;
 
 // System defined
-const char *deviceType = "APTM2 - andris_pooltemp_mk1_8266_800mah_ds18b20";
+
 const char *sensorType = "water_temp"; // only 1 sensor
 char device_chipId[13];
 double batt_level;
@@ -169,7 +170,7 @@ void publishDeviceStatus()
   DynamicJsonDocument doc(400);
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
-  doc["device_type"] = deviceType;
+  doc["device_type"] = DEVICE_TYPE;
   doc["batt_level"] = A0sensorValue;
   doc["wifi_strength"] = wifiStrengthInBars();
   doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
