@@ -5,4 +5,4 @@ steps:
 artifacts: 
   objects: 
     location: 'gs://chas-c2689.appspot.com/pooltemp_ota_firmware/$TAG_NAME'
-    paths: ['.pioenvs/d1/firmware_D1.bin']
+    paths: ['.pioenvs/d1/firmware_d1.bin']
