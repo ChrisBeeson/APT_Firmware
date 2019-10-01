@@ -5,4 +5,4 @@ steps:
 artifacts: 
   objects: 
     location: 'gs://pooltemp_ato_firmware/$TAG_NAME'
-    paths: ['/workspace/.pioenvs/esp32/firmware_esp32.bin','/workspace/.pioenvs/esp8266/firmware_esp8266.bin']
+    paths: ['/workspace/.pioenvs/d1/firmware_d1.bin']
