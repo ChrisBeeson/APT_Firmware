@@ -31,6 +31,16 @@
 // eeprom storage
 // deep sleep
 
+// Versioning
+
+#define CURRENT_VERSION VERSION
+#define VARIANT "d1"
+#define CLOUD_FUNCTION_URL "/getFirmwareDownloadUrl"
+
+// Debugging
+
+#define USE_SERIAL Serial
+
 // Hardware
 #define TEMP_SENSOR_BUS D3
 #define ANALOG_BUS A0
@@ -41,13 +51,12 @@ DallasTemperature sensors(&oneWire);
 
 double currentTemp = 0.0;
 
-// System defined
+// System
 
 const char *sensorType = "water_temp"; // only 1 sensor
 char device_chipId[13];
 double batt_level;
 int A0sensorValue = 0;
-
 int errorsSinceLastDevicePost = 0;
 
 // API endpoints
@@ -55,12 +64,11 @@ const char *APIurl = "us-central1-chas-c2689.cloudfunctions.net";
 const char *sensorAPIEndPoint = "/sensorData";
 const char *deviceAPIEndPoint = "/deviceStatus";
 
-// User defined
+// User
 const char *userId = "testUserA";
 char ssid[] = "Galactica";
 char password[] = "archiefifi";
 //TODO: Wifi needs to be encryped and loaded from EEPROM.
-
 
 void setChipString();
 int wifiStrengthInBars();
@@ -68,6 +76,7 @@ void connectToWifi();
 bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
 void publishTemp();
 void publishDeviceStatus();
+String getDownloadUrl();
 
 void setup()
 {
@@ -90,7 +99,7 @@ void loop()
 {
   digitalWrite(LED_BUILTIN, HIGH);
 
-  sensors.requestTemperatures();        // sample temp
+  sensors.requestTemperatures(); // sample temp
   double tempCheck = sensors.getTempCByIndex(0);
 
   currentTemp = tempCheck;
@@ -116,6 +125,8 @@ void loop()
 
   // Check for firmware update
 
+  Serial.println(getDownloadUrl());
+
   // Close wifi
 
   //Wifi.end();
@@ -135,7 +146,6 @@ void setChipString()
   uint16_t chip = (uint16_t)(chipid >> 32);
   snprintf(device_chipId, 13, "%04X%08X", chip, (uint32_t)chipid);
 }
-
 
 void publishTemp()
 {
@@ -165,12 +175,12 @@ void publishTemp()
 
 void publishDeviceStatus()
 {
-  A0sensorValue = analogRead(ANALOG_BUS);   // batt_ level from A0
+  A0sensorValue = analogRead(ANALOG_BUS); // batt_ level from A0
 
   DynamicJsonDocument doc(400);
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
-  doc["device_type"] = DEVICE_TYPE;
+  doc["device_type"] = "APT2019"; //TODO: should be DEVICE_TYPE
   doc["batt_level"] = A0sensorValue;
   doc["wifi_strength"] = wifiStrengthInBars();
   doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
@@ -239,19 +249,19 @@ int wifiStrengthInBars()
   {
     bars = 5;
   }
-  else if ((RSSI<-55) & (RSSI> -65))
+  else if ((RSSI < -55) & (RSSI > -65))
   {
     bars = 4;
   }
-  else if ((RSSI<-65) & (RSSI> -70))
-  { 
+  else if ((RSSI < -65) & (RSSI > -70))
+  {
     bars = 3;
   }
-  else if ((RSSI<-70) & (RSSI> -78))
+  else if ((RSSI < -70) & (RSSI > -78))
   {
     bars = 2;
   }
-  else if ((RSSI<-78) & (RSSI> -82))
+  else if ((RSSI < -78) & (RSSI > -82))
   {
     bars = 1;
   }
@@ -281,4 +291,55 @@ void connectToWifi()
   Serial.println("Connection established!");
   Serial.print("IP address:\t");
   Serial.println(WiFi.localIP()); // Send the IP address of the ESP8266 to the computer
+}
+
+/* 
+ * Check if needs to update the device and returns the download url.
+ */
+String getDownloadUrl()
+{
+  HTTPClient https;
+  BearSSL::WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+  String downloadUrl;
+  USE_SERIAL.print("[HTTP] begin...\n");
+
+  String url = CLOUD_FUNCTION_URL;
+  url += String("?version=") + CURRENT_VERSION;
+  url += String("&variant=") + VARIANT;
+
+  https.begin(secureClient, APIurl, 443, url, true);
+
+  USE_SERIAL.print("[HTTP] GET...\n");
+  // start connection and send HTTP header
+  int httpCode = https.GET();
+
+  // httpCode will be negative on error
+  if (httpCode > 0)
+  {
+    // HTTP header has been send and Server response header has been handled
+    USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
+
+    // file found at server
+    if (httpCode == HTTP_CODE_OK)
+    {
+      USE_SERIAL.println("Theres a new version to download");
+      String payload = https.getString();
+      USE_SERIAL.println(payload);
+      downloadUrl = payload;
+      
+    }
+    else
+    {
+      USE_SERIAL.println("Device is up to date");
+    }
+  }
+  else
+  {
+    USE_SERIAL.printf("[HTTP] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+  }
+
+  https.end();
+
+  return downloadUrl;
 }
