@@ -19,7 +19,7 @@
 #include <string.h>
 
 //
-// This is the ANDRIS wifi battery powered floating water temperature sensor 2019.
+// This is the ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
 //
 
 //TODO:
@@ -33,18 +33,20 @@
 
 // Versioning
 
+#define PRODUCT "APT2019"
 #define CURRENT_VERSION VERSION
 #define VARIANT "d1"
-#define CLOUD_FUNCTION_URL "/getFirmwareDownloadUrl"
 
-// Debugging
+#define FIRMWARE_URL "/getFirmwareDownloadUrl"
+#define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net"
+#define SENSOR_DATA_API_ENDPOINT "/sensorData"
+#define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
 
 #define USE_SERIAL Serial
 
 // Hardware
 #define TEMP_SENSOR_BUS D3
 #define ANALOG_BUS A0
-#define DEVICE_TYPE = "APT2019"
 
 OneWire oneWire(TEMP_SENSOR_BUS);
 DallasTemperature sensors(&oneWire);
@@ -59,10 +61,6 @@ double batt_level;
 int A0sensorValue = 0;
 int errorsSinceLastDevicePost = 0;
 
-// API endpoints
-const char *APIurl = "us-central1-chas-c2689.cloudfunctions.net";
-const char *sensorAPIEndPoint = "/sensorData";
-const char *deviceAPIEndPoint = "/deviceStatus";
 
 // User
 const char *userId = "testUserA";
@@ -124,8 +122,7 @@ void loop()
   publishDeviceStatus();
 
   // Check for firmware update
-
-  Serial.println(getDownloadUrl());
+   getDownloadUrl();
 
   // Close wifi
 
@@ -166,7 +163,7 @@ void publishTemp()
   serializeJson(doc, JSONmessage);
   Serial.println(JSONmessage);
 
-  if (!HttpJSONStringToEndPoint(JSONmessage, sensorAPIEndPoint))
+  if (!HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT))
   {
     Serial.println("JSON Post failed");
     errorsSinceLastDevicePost++;
@@ -180,17 +177,17 @@ void publishDeviceStatus()
   DynamicJsonDocument doc(400);
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
-  doc["device_type"] = "APT2019"; //TODO: should be DEVICE_TYPE
+  doc["product"] = PRODUCT;
   doc["batt_level"] = A0sensorValue;
   doc["wifi_strength"] = wifiStrengthInBars();
   doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
-  doc["firmwareVersion"] = "000";
+  doc["firmwareVersion"] = CURRENT_VERSION;
 
   String JSONmessage;
   serializeJson(doc, JSONmessage);
   Serial.println(JSONmessage);
 
-  if (!HttpJSONStringToEndPoint(JSONmessage, deviceAPIEndPoint))
+  if (!HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT))
   {
     Serial.println("JSON Post failed");
     errorsSinceLastDevicePost++;
@@ -208,7 +205,7 @@ bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
     HTTPClient https;
     BearSSL::WiFiClientSecure secureClient;
     secureClient.setInsecure();
-    https.begin(secureClient, APIurl, 443, endPoint, true);
+    https.begin(secureClient, API_SERVER_URL, 443, endPoint, true);
     https.addHeader("Content-Type", "application/json");
 
     int httpResponseCode = https.POST(JSONString);
@@ -306,44 +303,37 @@ String getDownloadUrl()
   String downloadUrl;
 
   USE_SERIAL.print(". ");
-
-  String url = CLOUD_FUNCTION_URL;
+  String url = FIRMWARE_URL;
   url += String("?version=") + CURRENT_VERSION;
   url += String("&variant=") + VARIANT;
-
-  https.begin(secureClient, APIurl, 443, url, true);
+  https.begin(secureClient, API_SERVER_URL, 443, url, true);
 
   USE_SERIAL.print(". ");
-  // start connection and send HTTP header
   int httpCode = https.GET();
+  USE_SERIAL.print(". ");
 
-  // httpCode will be negative on error
   if (httpCode > 0)
   {
-    USE_SERIAL.printf(". ");
-
       String response = https.getString();
+      USE_SERIAL.printf(". ");
 
-    // file found at server
     if (httpCode == HTTP_CODE_OK)
     {
-      USE_SERIAL.println("Theres a new version to download");
+      USE_SERIAL.println("Theres a new version to download.");
       String payload = https.getString();
       USE_SERIAL.println(payload);
       downloadUrl = payload;
-      
     }
     else
     {
-      USE_SERIAL.println("Device is up to date");
+      USE_SERIAL.println("Device is up to date.");
     }
   }
   else
   {
     USE_SERIAL.printf(" ! FAILED, error: %s\n", https.errorToString(httpCode).c_str());
+     return "";
   }
-
   https.end();
-
   return downloadUrl;
 }
