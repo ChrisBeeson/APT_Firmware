@@ -306,6 +306,7 @@ String getDownloadUrl()
   String url = FIRMWARE_URL;
   url += String("?version=") + CURRENT_VERSION;
   url += String("&variant=") + VARIANT;
+  url += String("&product=") + PRODUCT;
   https.begin(secureClient, API_SERVER_URL, 443, url, true);
 
   USE_SERIAL.print(". ");
