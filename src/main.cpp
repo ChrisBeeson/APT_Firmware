@@ -136,7 +136,7 @@ void loop()
   //  System.sleep(SLEEP_MODE_DEEP,60*15);  //15 mins
   digitalWrite(LED_BUILTIN, LOW);
 
-  delay(5000);
+  delay(15000);
 }
 
 void setChipString()
@@ -298,11 +298,14 @@ void connectToWifi()
  */
 String getDownloadUrl()
 {
+  USE_SERIAL.print("Checking for new firmware version. ");
+
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
   String downloadUrl;
-  USE_SERIAL.print("[HTTP] begin...\n");
+
+  USE_SERIAL.print(". ");
 
   String url = CLOUD_FUNCTION_URL;
   url += String("?version=") + CURRENT_VERSION;
@@ -310,15 +313,16 @@ String getDownloadUrl()
 
   https.begin(secureClient, APIurl, 443, url, true);
 
-  USE_SERIAL.print("[HTTP] GET...\n");
+  USE_SERIAL.print(". ");
   // start connection and send HTTP header
   int httpCode = https.GET();
 
   // httpCode will be negative on error
   if (httpCode > 0)
   {
-    // HTTP header has been send and Server response header has been handled
-    USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
+    USE_SERIAL.printf(". ");
+
+      String response = https.getString();
 
     // file found at server
     if (httpCode == HTTP_CODE_OK)
@@ -336,7 +340,7 @@ String getDownloadUrl()
   }
   else
   {
-    USE_SERIAL.printf("[HTTP] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+    USE_SERIAL.printf(" ! FAILED, error: %s\n", https.errorToString(httpCode).c_str());
   }
 
   https.end();
