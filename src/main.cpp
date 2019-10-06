@@ -18,6 +18,7 @@
 #include <OneWire.h>
 #include <string.h>
 
+
 //
 // This is the ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
 //
@@ -33,6 +34,8 @@
 
 // Versioning
 
+//#define DEBUG_ESP_HTTP_CLIENT 1
+
 #define PRODUCT "APT2019"
 #define CURRENT_VERSION VERSION
 #define VARIANT "d1"
@@ -41,6 +44,8 @@
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net"
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
+
+#define STORAGE_BASE_URL "storage.googleapis.com"
 
 #define USE_SERIAL Serial
 
@@ -61,7 +66,6 @@ double batt_level;
 int A0sensorValue = 0;
 int errorsSinceLastDevicePost = 0;
 
-
 // User
 const char *userId = "testUserA";
 char ssid[] = "Galactica";
@@ -73,12 +77,13 @@ int wifiStrengthInBars();
 void connectToWifi();
 bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
 void publishTemp();
+void device_Maintance();
 void publishDeviceStatus();
 String getDownloadUrl();
+bool downloadUpdate(String url);
 
 void setup()
 {
-
   pinMode(LED_BUILTIN, OUTPUT);
 
   Serial.begin(115200);
@@ -86,6 +91,7 @@ void setup()
   Serial.println('\n');
   setChipString();
 
+  // Are we freshly flashed? And need to send chipID to DB? - This will be done over usb. Test sensor & battery.
   // Are we provisioned?  Ie. Have a username, ssid and password?
 
   sensors.begin(); // Start sampling Temperature
@@ -119,10 +125,8 @@ void loop()
     Serial.println(" devices.");
   }
 
-  publishDeviceStatus();
-
-  // Check for firmware update
-   getDownloadUrl();
+  // every X amount of data samples run device_maintance to check batt / wifi / updates
+  device_Maintance();
 
   // Close wifi
 
@@ -290,6 +294,22 @@ void connectToWifi()
   Serial.println(WiFi.localIP()); // Send the IP address of the ESP8266 to the computer
 }
 
+void device_Maintance()
+{
+  publishDeviceStatus();
+
+  // Check if we need to download a new version
+  String downloadUrl = getDownloadUrl();
+  if (downloadUrl.length() > 0)
+  {
+    bool success = downloadUpdate(downloadUrl);
+    if (!success)
+    {
+      USE_SERIAL.println("Error updating device");
+    }
+  }
+}
+
 /* 
  * Check if needs to update the device and returns the download url.
  */
@@ -315,8 +335,9 @@ String getDownloadUrl()
 
   if (httpCode > 0)
   {
-      String response = https.getString();
-      USE_SERIAL.printf(". ");
+    String response = https.getString();
+    USE_SERIAL.printf(". HTTP Response:");
+    USE_SERIAL.println(response);
 
     if (httpCode == HTTP_CODE_OK)
     {
@@ -324,6 +345,7 @@ String getDownloadUrl()
       String payload = https.getString();
       USE_SERIAL.println(payload);
       downloadUrl = payload;
+      return downloadUrl;
     }
     else
     {
@@ -333,8 +355,105 @@ String getDownloadUrl()
   else
   {
     USE_SERIAL.printf(" ! FAILED, error: %s\n", https.errorToString(httpCode).c_str());
-     return "";
+    return "";
   }
   https.end();
   return downloadUrl;
+}
+
+bool downloadUpdate(String url)
+{
+        USE_SERIAL.println("Beginning download");
+                USE_SERIAL.println(url);
+  HTTPClient https;
+  BearSSL::WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+
+  https.begin(secureClient, STORAGE_BASE_URL, 443, url, true);
+
+    USE_SERIAL.printf(". ");
+  // start connection and send HTTP header
+  int httpCode = https.GET();
+
+    USE_SERIAL.print("HTTP Code:");
+  USE_SERIAL.println(httpCode);
+      String response = https.getString();
+    USE_SERIAL.println(response);
+
+  if (httpCode > 0)
+  {
+    // HTTP header has been send and Server response header has been handled
+    USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
+
+    // file found at server
+    if (httpCode == HTTP_CODE_OK)
+    {
+
+      size_t contentLength = https.getSize();
+      USE_SERIAL.println("contentLength : " + String(contentLength));
+
+      if (contentLength > 0)
+      {
+        bool canBegin = Update.begin(contentLength, U_FLASH);
+        if (canBegin)
+        {
+          WiFiClient stream = https.getStream();
+                    USE_SERIAL.print("stream: ");
+          USE_SERIAL.println(stream);
+          USE_SERIAL.println("Begin OTA. This may take 2 - 5 mins to complete. Things might be quiet for a while.. Patience!");
+          size_t written = Update.writeStream(stream);
+
+          if (written == contentLength)
+          {
+            USE_SERIAL.println("Written : " + String(written) + " successfully");
+          }
+          else
+          {
+            USE_SERIAL.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
+          }
+
+          if (Update.end())
+          {
+            USE_SERIAL.println("OTA done!");
+            if (Update.isFinished())
+            {
+              USE_SERIAL.println("Update successfully completed. Rebooting.");
+              ESP.restart();
+              return true;
+            }
+            else
+            {
+              USE_SERIAL.println("Update not finished? Something went wrong!");
+              return false;
+            }
+          }
+          else
+          {
+            USE_SERIAL.println("Error Occurred. Error #: " + String(Update.getError()));
+            return false;
+          }
+        }
+        else
+        {
+          USE_SERIAL.println("Not enough space to begin OTA");
+          //   client.flush();    <- not sure what flush is
+          return false;
+        }
+      }
+      else
+      {
+        USE_SERIAL.println("There was no content in the response");
+        //   client.flush();
+        return false;
+      }
+    }
+    else
+    {
+      return false;
+    }
+  }
+  else
+  {
+    return false;
+  }
 }
