@@ -18,7 +18,6 @@
 #include <OneWire.h>
 #include <string.h>
 
-
 //
 // This is the ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
 //
@@ -322,16 +321,12 @@ String getDownloadUrl()
   secureClient.setInsecure();
   String downloadUrl;
 
-  USE_SERIAL.print(". ");
   String url = FIRMWARE_URL;
   url += String("?version=") + CURRENT_VERSION;
   url += String("&variant=") + VARIANT;
   url += String("&product=") + PRODUCT;
   https.begin(secureClient, API_SERVER_URL, 443, url, true);
-
-  USE_SERIAL.print(". ");
   int httpCode = https.GET();
-  USE_SERIAL.print(". ");
 
   if (httpCode > 0)
   {
@@ -363,22 +358,22 @@ String getDownloadUrl()
 
 bool downloadUpdate(String url)
 {
-        USE_SERIAL.println("Beginning download");
-                USE_SERIAL.println(url);
+  USE_SERIAL.println("Beginning download");
+  USE_SERIAL.println(url);
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
 
   https.begin(secureClient, STORAGE_BASE_URL, 443, url, true);
 
-    USE_SERIAL.printf(". ");
+  USE_SERIAL.printf(". ");
   // start connection and send HTTP header
   int httpCode = https.GET();
 
-    USE_SERIAL.print("HTTP Code:");
+  USE_SERIAL.print("HTTP Code:");
   USE_SERIAL.println(httpCode);
-      String response = https.getString();
-    USE_SERIAL.println(response);
+  String response = https.getString();
+  USE_SERIAL.println(response);
 
   if (httpCode > 0)
   {
@@ -388,7 +383,6 @@ bool downloadUpdate(String url)
     // file found at server
     if (httpCode == HTTP_CODE_OK)
     {
-
       size_t contentLength = https.getSize();
       USE_SERIAL.println("contentLength : " + String(contentLength));
 
@@ -397,11 +391,8 @@ bool downloadUpdate(String url)
         bool canBegin = Update.begin(contentLength, U_FLASH);
         if (canBegin)
         {
-          WiFiClient stream = https.getStream();
-                    USE_SERIAL.print("stream: ");
-          USE_SERIAL.println(stream);
           USE_SERIAL.println("Begin OTA. This may take 2 - 5 mins to complete. Things might be quiet for a while.. Patience!");
-          size_t written = Update.writeStream(stream);
+          size_t written = Update.writeStream(https.getStream());
 
           if (written == contentLength)
           {
