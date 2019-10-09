@@ -33,8 +33,6 @@
 
 // Versioning
 
-//#define DEBUG_ESP_HTTP_CLIENT 1
-
 #define PRODUCT "APT2019"
 #define CURRENT_VERSION VERSION
 #define VARIANT "d1"
@@ -43,8 +41,6 @@
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net"
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
-
-#define STORAGE_BASE_URL "storage.googleapis.com"
 
 #define USE_SERIAL Serial
 
@@ -358,13 +354,31 @@ String getDownloadUrl()
 
 bool downloadUpdate(String url)
 {
-  USE_SERIAL.println("Beginning download");
-  USE_SERIAL.println(url);
+  // URL is sent as a JSON object... So deserialise it.
+
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, url);
+
+  if (error)
+  {
+    USE_SERIAL.print(F("deserializeJson() failed: "));
+    USE_SERIAL.println(error.c_str());
+    //  return false;
+  }
+
+  const char *baseURL = doc["baseURL"];
+  const char *path = doc["path"];
+
+  USE_SERIAL.println("Beginning download Base: ");
+  USE_SERIAL.println(baseURL);
+  USE_SERIAL.println("Path: ");
+  USE_SERIAL.println(path);
+
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
 
-  https.begin(secureClient, STORAGE_BASE_URL, 443, url, true);
+  https.begin(secureClient, baseURL, 443, path, true);
 
   USE_SERIAL.printf(". ");
   // start connection and send HTTP header
@@ -393,7 +407,7 @@ bool downloadUpdate(String url)
         {
           USE_SERIAL.println("Begin OTA. This may take 2 - 5 mins to complete. Things might be quiet for a while.. Patience!");
           size_t written = Update.writeStream(https.getStream());
-
+          //size_t written = 0;
           if (written == contentLength)
           {
             USE_SERIAL.println("Written : " + String(written) + " successfully");
