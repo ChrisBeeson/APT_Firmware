@@ -21,15 +21,16 @@
 //
 // This is the ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
 //
-
 //TODO:
-// OTA updates - Testing
-// batt_level
-// device posts X
-// wifi_level X
-// provisioning
-// eeprom storage
-// deep sleep
+// [X] OTA updates X
+// [ ] OTA console monitoring
+// [ ] batt_level
+// [X] device posts 
+// [X] wifi_level
+// [ ] provisioning
+// [ ] eeprom storage
+// [ ] deep sleep
+//
 
 // Versioning
 
