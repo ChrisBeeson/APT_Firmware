@@ -1,4 +1,4 @@
-#include "Arduino.h"
+
 #include "Esp.h"
 #include <WiFiClientSecure.h>
 #include <WiFiClientSecureBearSSL.h>
@@ -17,12 +17,15 @@
 #include <DallasTemperature.h>
 #include <OneWire.h>
 #include <string.h>
+//#include <ArduinoSTL.h>
+//#include <vector>
+
 
 //
-// This is the ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
+// ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
 //
 //TODO:
-// [X] OTA updates X
+// [X] OTA updates Xf
 // [ ] OTA console monitoring
 // [ ] batt_level
 // [X] device posts 
@@ -32,41 +35,52 @@
 // [ ] deep sleep
 //
 
-// Versioning
-
-#define PRODUCT "APT2019"
 #define CURRENT_VERSION VERSION
-#define VARIANT "d1"
 
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net"
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
+#define DEBUG_API_ENDPOINT "/debug"
 
+#define PUBLISH_DEVICE_CYCLES 10            // number of restarts before publishing device status
+int rebootsSinceLastDevicePost = 0;
+
+#define DEBUG_INFO  0
+#define DEBUG_WARN  1
+#define DEBUG_ERROR 2
+#define OTA_DEBUG
 #define USE_SERIAL Serial
 
+ uint32_t lastDebugPostTimestamp = 0;
+// String DebugQueue[];
+ //vector<String> OTAdebugQueue;
+
+
 // Hardware
-#define TEMP_SENSOR_BUS D3
-#define ANALOG_BUS A0
+//#define TEMP_SENSOR_BUS D1
+//#define ANALOG_BUS A0
 
 OneWire oneWire(TEMP_SENSOR_BUS);
 DallasTemperature sensors(&oneWire);
-
 double currentTemp = 0.0;
 
 // System
 
-const char *sensorType = "water_temp"; // only 1 sensor
+const char *sensorType = "water_temp";
 char device_chipId[13];
 double batt_level;
 int A0sensorValue = 0;
 int errorsSinceLastDevicePost = 0;
+
+
 
 // User
 const char *userId = "testUserA";
 char ssid[] = "Galactica";
 char password[] = "archiefifi";
 //TODO: Wifi needs to be encryped and loaded from EEPROM.
+
 
 void setChipString();
 int wifiStrengthInBars();
@@ -84,10 +98,9 @@ void setup()
 
   Serial.begin(115200);
   delay(10);
-  Serial.println('\n');
   setChipString();
 
-  // Are we freshly flashed? And need to send chipID to DB? - This will be done over usb. Test sensor & battery.
+  // Are we freshly flashed? And need to send chipID to firestore? - This will be done over usb. Test sensor & battery.
   // Are we provisioned?  Ie. Have a username, ssid and password?
 
   sensors.begin(); // Start sampling Temperature
@@ -101,35 +114,31 @@ void loop()
 
   sensors.requestTemperatures(); // sample temp
   double tempCheck = sensors.getTempCByIndex(0);
-
   currentTemp = tempCheck;
-  publishTemp();
 
-  if (tempCheck > -50.0 && tempCheck < 60.0)
+  if (tempCheck > -50.0 && tempCheck < 100.0)
   {
     currentTemp = tempCheck;
-    // publishTemp();
+    publishTemp();
   }
   else
   {
-    Serial.println("Error: Temp out of bounds");
-    Serial.println(tempCheck);
-
-    // locate devices on the bus
-    Serial.print("Found ");
-    Serial.print(sensors.getDeviceCount(), DEC);
-    Serial.println(" devices.");
+    USE_SERIAL.println("Error: Temp out of bounds");
+    USE_SERIAL.println(currentTemp);
   }
 
   // every X amount of data samples run device_maintance to check batt / wifi / updates
-  device_Maintance();
+  if (rebootsSinceLastDevicePost == PUBLISH_DEVICE_CYCLES) {
+    rebootsSinceLastDevicePost = 0;
+    device_Maintance();
+  } else {
+    rebootsSinceLastDevicePost++;
+  }
 
   // Close wifi
-
   //Wifi.end();
 
   // Sleep
-
   //  System.sleep(SLEEP_MODE_DEEP,60*15);  //15 mins
   digitalWrite(LED_BUILTIN, LOW);
 
@@ -158,14 +167,13 @@ void publishTemp()
   doc["sensor"] = sensorType;
   doc["data"] = temp_buf;
 
-  // int lengthSimple = doc.measureLength();
   String JSONmessage;
   serializeJson(doc, JSONmessage);
-  Serial.println(JSONmessage);
+  //USE_SERIAL.println(JSONmessage);
 
   if (!HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT))
   {
-    Serial.println("JSON Post failed");
+    USE_SERIAL.println("JSON Post failed");
     errorsSinceLastDevicePost++;
   }
 }
@@ -185,11 +193,11 @@ void publishDeviceStatus()
 
   String JSONmessage;
   serializeJson(doc, JSONmessage);
-  Serial.println(JSONmessage);
+  //Serial.println(JSONmessage);
 
   if (!HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT))
   {
-    Serial.println("JSON Post failed");
+    USE_SERIAL.println("JSON Post failed");
     errorsSinceLastDevicePost++;
   }
   else
@@ -213,15 +221,14 @@ bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
     if (httpResponseCode > 0)
     {
       String response = https.getString();
-      Serial.println(httpResponseCode);
-      Serial.println(response);
+      //USE_SERIAL.println(httpResponseCode);
+      //USE_SERIAL.println(response);
     }
     else
     {
-      Serial.print("Error on sending PUT Request: ");
-      Serial.println(httpResponseCode);
+      USE_SERIAL.print("Error on sending PUT Request: ");
+      USE_SERIAL.println(httpResponseCode);
       String response = https.getString();
-      Serial.println(response);
       errorsSinceLastDevicePost++;
       return false;
     }
@@ -231,7 +238,7 @@ bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
   }
   else
   {
-    Serial.println("Trying to send JSON, but Wifi is not connected");
+    USE_SERIAL.println("Trying to send JSON, but Wifi is not connected");
     errorsSinceLastDevicePost++;
     return false;
   }
@@ -272,22 +279,18 @@ int wifiStrengthInBars()
 void connectToWifi()
 {
   WiFi.begin(ssid, password);
-  Serial.print("Connecting to ");
-  Serial.print(ssid);
-  Serial.println(" ...");
-
   int i = 0;
   while (WiFi.status() != WL_CONNECTED)
   { // Wait for the Wi-Fi to connect
-    delay(1000);
-    Serial.print(++i);
-    Serial.print(' ');
+  i++;
+  if (i == 1000) {
+    USE_SERIAL.println("Unable to connect to Wifi: 1000 Attempts");
+    // TODO: Decide how to handle this
   }
+    delay(1000);
+  }
+  USE_SERIAL.println("Wifi Connection Established!");
 
-  Serial.println('\n');
-  Serial.println("Connection established!");
-  Serial.print("IP address:\t");
-  Serial.println(WiFi.localIP()); // Send the IP address of the ESP8266 to the computer
 }
 
 void device_Maintance()
@@ -301,7 +304,7 @@ void device_Maintance()
     bool success = downloadUpdate(downloadUrl);
     if (!success)
     {
-      USE_SERIAL.println("Error updating device");
+      USE_SERIAL.println("Device update failed.");
     }
   }
 }
@@ -311,7 +314,7 @@ void device_Maintance()
  */
 String getDownloadUrl()
 {
-  USE_SERIAL.print("Checking for new firmware version. ");
+  //USE_SERIAL.print("Checking for new firmware version. ");
 
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
@@ -327,13 +330,8 @@ String getDownloadUrl()
 
   if (httpCode > 0)
   {
-    String response = https.getString();
-    USE_SERIAL.printf(". HTTP Response:");
-    USE_SERIAL.println(response);
-
     if (httpCode == HTTP_CODE_OK)
     {
-      USE_SERIAL.println("Theres a new version to download.");
       String payload = https.getString();
       USE_SERIAL.println(payload);
       downloadUrl = payload;
@@ -341,12 +339,13 @@ String getDownloadUrl()
     }
     else
     {
-      USE_SERIAL.println("Device is up to date.");
+   //   USE_SERIAL.println("Device is up to date.");
+      return "";
     }
   }
   else
   {
-    USE_SERIAL.printf(" ! FAILED, error: %s\n", https.errorToString(httpCode).c_str());
+    USE_SERIAL.printf("Unable to download firmware URL, error: %s\n", https.errorToString(httpCode).c_str());
     return "";
   }
   https.end();
@@ -364,16 +363,16 @@ bool downloadUpdate(String url)
   {
     USE_SERIAL.print(F("deserializeJson() failed: "));
     USE_SERIAL.println(error.c_str());
-    //  return false;
+    return false;
   }
 
   const char *baseURL = doc["baseURL"];
   const char *path = doc["path"];
 
-  USE_SERIAL.println("Beginning download Base: ");
-  USE_SERIAL.println(baseURL);
-  USE_SERIAL.println("Path: ");
-  USE_SERIAL.println(path);
+  //USE_SERIAL.println("Beginning download Base: ");
+  //USE_SERIAL.println(baseURL);
+  //USE_SERIAL.println("Path: ");
+  //USE_SERIAL.println(path);
 
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
@@ -393,29 +392,29 @@ bool downloadUpdate(String url)
   if (httpCode > 0)
   {
     // HTTP header has been send and Server response header has been handled
-    USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
+   // USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
 
     // file found at server
     if (httpCode == HTTP_CODE_OK)
     {
       size_t contentLength = https.getSize();
-      USE_SERIAL.println("contentLength : " + String(contentLength));
+     // USE_SERIAL.println("contentLength : " + String(contentLength));
 
       if (contentLength > 0)
       {
         bool canBegin = Update.begin(contentLength, U_FLASH);
         if (canBegin)
         {
-          USE_SERIAL.println("Begin OTA. This may take 2 - 5 mins to complete. Things might be quiet for a while.. Patience!");
+          USE_SERIAL.println("Beginning OTA update. This may take 2 - 5 mins to complete. Things might be quiet for a while.. Patience!");
           size_t written = Update.writeStream(https.getStream());
           //size_t written = 0;
           if (written == contentLength)
           {
-            USE_SERIAL.println("Written : " + String(written) + " successfully");
+          //  USE_SERIAL.println("Written : " + String(written) + " successfully");
           }
           else
           {
-            USE_SERIAL.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
+         //   USE_SERIAL.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
           }
 
           if (Update.end())
@@ -429,7 +428,7 @@ bool downloadUpdate(String url)
             }
             else
             {
-              USE_SERIAL.println("Update not finished? Something went wrong!");
+              USE_SERIAL.println("Update not finished. Something went wrong!");
               return false;
             }
           }
@@ -463,3 +462,4 @@ bool downloadUpdate(String url)
     return false;
   }
 }
+

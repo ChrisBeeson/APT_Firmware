@@ -2,5 +2,9 @@
     "terminal.integrated.env.osx": {
         "PATH": "/Users/Chris/.platformio/penv/bin:/Users/Chris/.platformio/penv:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/share/dotnet:~/.dotnet/tools:/Library/Frameworks/Mono.framework/Versions/Current/Commands:/Users/Chris/Dropbox/Chris/Projects/Flutter_Dev/flutter/bin/",
         "PLATFORMIO_CALLER": "vscode"
-    }
+    },
+    "files.associations": {
+        "vector": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "Disabled"
 }
