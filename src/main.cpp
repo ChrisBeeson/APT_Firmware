@@ -43,7 +43,7 @@
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
 #define DEBUG_API_ENDPOINT "/debug"
 
-#define PUBLISH_DEVICE_CYCLES 10            // number of restarts before publishing device status
+#define PUBLISH_DEVICE_CYCLES 1            // number of restarts before publishing device status
 int rebootsSinceLastDevicePost = 0;
 
 #define DEBUG_INFO  0
@@ -52,18 +52,12 @@ int rebootsSinceLastDevicePost = 0;
 #define OTA_DEBUG
 #define USE_SERIAL Serial
 
- uint32_t lastDebugPostTimestamp = 0;
-// String DebugQueue[];
- //vector<String> OTAdebugQueue;
+uint32_t lastDebugPostTimestamp = 0;
 
-
-// Hardware
-//#define TEMP_SENSOR_BUS D1
-//#define ANALOG_BUS A0
-
-OneWire oneWire(TEMP_SENSOR_BUS);
+OneWire oneWire(D1);
 DallasTemperature sensors(&oneWire);
 double currentTemp = 0.0;
+  ADC_MODE(ADC_VCC);
 
 // System
 
@@ -113,18 +107,17 @@ void loop()
   digitalWrite(LED_BUILTIN, HIGH);
 
   sensors.requestTemperatures(); // sample temp
-  double tempCheck = sensors.getTempCByIndex(0);
-  currentTemp = tempCheck;
+  currentTemp = sensors.getTempCByIndex(0);
 
   if (tempCheck > -50.0 && tempCheck < 100.0)
   {
-    currentTemp = tempCheck;
     publishTemp();
   }
   else
   {
     USE_SERIAL.println("Error: Temp out of bounds");
-    USE_SERIAL.println(currentTemp);
+    USE_SERIAL.println(tempCheck);
+    publishTemp();
   }
 
   // every X amount of data samples run device_maintance to check batt / wifi / updates
@@ -157,6 +150,7 @@ void publishTemp()
 {
   char temp_buf[64];
   sprintf(temp_buf, "%2.1f", currentTemp);
+  USE_SERIAL.println("Publishing Temp");
   Serial.println(currentTemp);
 
   // Create JSON String
@@ -180,16 +174,17 @@ void publishTemp()
 
 void publishDeviceStatus()
 {
-  A0sensorValue = analogRead(ANALOG_BUS); // batt_ level from A0
-
   DynamicJsonDocument doc(400);
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
   doc["product"] = PRODUCT;
-  doc["batt_level"] = A0sensorValue;
+  doc["batt_level"] = "TODO";
   doc["wifi_strength"] = wifiStrengthInBars();
   doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
   doc["firmwareVersion"] = CURRENT_VERSION;
+  int vcc = ESP.getVcc();
+  doc["vcc"] = vcc;
+
 
   String JSONmessage;
   serializeJson(doc, JSONmessage);
