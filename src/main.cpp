@@ -17,12 +17,11 @@
 #include <DallasTemperature.h>
 #include <OneWire.h>
 #include <string.h>
-//#include <ArduinoSTL.h>
-//#include <vector>
 
+//ADC_MODE(ADC_VCC);
 
 //
-// ANDRIS Pool Themometer (APT2019) wifi battery powered floating water temperature sensor.
+// ANDRIS Pool Thermometer (APT-01) wifi battery powered floating water temperature sensor.
 //
 //TODO:
 // [X] OTA updates Xf
@@ -31,14 +30,15 @@
 // [X] device posts 
 // [X] wifi_level
 // [ ] provisioning
-// [ ] eeprom storage
+// [ ] file storage
 // [ ] deep sleep
+// [ ] optimise battery - Compress and limit wifi broadcast, limited leds, sensors off after initial reading etc.
 //
 
 #define CURRENT_VERSION VERSION
 
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
-#define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net"
+#define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net" //TODO: move to config file
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
 #define DEBUG_API_ENDPOINT "/debug"
@@ -57,14 +57,13 @@ uint32_t lastDebugPostTimestamp = 0;
 OneWire oneWire(D1);
 DallasTemperature sensors(&oneWire);
 double currentTemp = 0.0;
-  ADC_MODE(ADC_VCC);
+
 
 // System
 
 const char *sensorType = "water_temp";
 char device_chipId[13];
 double batt_level;
-int A0sensorValue = 0;
 int errorsSinceLastDevicePost = 0;
 
 
@@ -108,15 +107,16 @@ void loop()
 
   sensors.requestTemperatures(); // sample temp
   currentTemp = sensors.getTempCByIndex(0);
+  publishTemp();
 
-  if (tempCheck > -50.0 && tempCheck < 100.0)
+  if (currentTemp > -50.0 && currentTemp < 100.0)
   {
-    publishTemp();
+    
   }
   else
   {
     USE_SERIAL.println("Error: Temp out of bounds");
-    USE_SERIAL.println(tempCheck);
+    USE_SERIAL.println(currentTemp);
     publishTemp();
   }
 
@@ -158,6 +158,7 @@ void publishTemp()
 
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
+  doc["product"] = PRODUCT;
   doc["sensor"] = sensorType;
   doc["data"] = temp_buf;
 
@@ -174,6 +175,10 @@ void publishTemp()
 
 void publishDeviceStatus()
 {
+  int vcc = ESP.getVcc();
+
+  //analogRead(A0);
+
   DynamicJsonDocument doc(400);
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
@@ -182,9 +187,7 @@ void publishDeviceStatus()
   doc["wifi_strength"] = wifiStrengthInBars();
   doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
   doc["firmwareVersion"] = CURRENT_VERSION;
-  int vcc = ESP.getVcc();
   doc["vcc"] = vcc;
-
 
   String JSONmessage;
   serializeJson(doc, JSONmessage);
