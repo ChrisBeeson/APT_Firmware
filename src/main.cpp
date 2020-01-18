@@ -18,6 +18,9 @@
 #include <OneWire.h>
 #include <string.h>
 #include <FS.h>
+#include <WiFiManager.h>
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
 
 //
 // ANDRIS Pool Thermometer (APT01) wifi battery powered floating water temperature sensor.
@@ -30,9 +33,9 @@
 // [X] device posts
 // [X] wifi_level
 // [ ] provisioning
-// [ ] Manufacturing onboarding
-// [ ] file storage
-// [ ] deep sleep
+// [x] Manufacturing onboarding
+// [x] file storage
+// [x] deep sleep
 // [ ] optimise battery - Compress and limit wifi broadcast, limited leds, sensors off after initial reading etc.
 //
 
@@ -66,8 +69,8 @@ int rebootsSinceLastDevicePost = 0;
 const char *device_id;
 const char *user_id;
 const char *userId = "testUserA";
-S ssid[] = "Galactica";
-char password[] = "archiefifi";
+const char *ssid = "Galactica";
+const char *password = "archiefifi";
 
 void setChipString()
 {
@@ -80,7 +83,7 @@ void setChipString()
 void onboard();
 void loadConfig();
 int wifiStrengthInBars();
-void connectToWifi();
+bool connectToWifi(String ssid, String password);
 String HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
 void publishTemp(double temp);
 void device_Maintance();
@@ -138,20 +141,17 @@ void setup()
 
   if (user_id == nullptr)
   {
-    DEBUG.println("\nNo USER_ID, sleeping forever");
+    DEBUG.println("\nNo USER_ID, start wifiManager");
     delay(300);
-    ESP.deepSleep(0);
+    WiFiManager wifiManager;
+   //wifiManager.resetSettings();
+    wifiManager.autoConnect("Pool Thermometer");
+    DEBUG.print("Connected!");
   }
 
-  connectToWifi();
+ // connectToWifi();
   dallas_sensors.begin(); // Start sampling Temperature
 }
-
-/*  ONBOARD  
-  - Test sensors, build JSON, and PUT onboardDevice
-  - Receive a device_id as response
-  - Store device_id in /config.json
-  - Deep sleep for a long time   */
 
 void onboard()
 {
@@ -395,7 +395,7 @@ int wifiStrengthInBars()
   return bars;
 }
 
-bool connectToWifi(string ssid, String password)
+bool connectToWifi(String ssid, String password)
 {
   WiFi.begin(ssid, password);
   int i = 0;
@@ -406,10 +406,13 @@ bool connectToWifi(string ssid, String password)
     {
       DEBUG.println("Unable to connect to Wifi after 1000 attempts");
       // TODO: Decide how to handle this
+        return false;
     }
     delay(1000);
   }
   DEBUG.println("Wifi Connection Established!");
+
+  return true;
 }
 
 void device_Maintance()
