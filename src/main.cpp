@@ -17,114 +17,257 @@
 #include <DallasTemperature.h>
 #include <OneWire.h>
 #include <string.h>
-
-//ADC_MODE(ADC_VCC);
+#include <FS.h>
 
 //
-// ANDRIS Pool Thermometer (APT-01) wifi battery powered floating water temperature sensor.
+// ANDRIS Pool Thermometer (APT01) wifi battery powered floating water temperature sensor.
 //
+
 //TODO:
 // [X] OTA updates Xf
 // [ ] OTA console monitoring
 // [ ] batt_level
-// [X] device posts 
+// [X] device posts
 // [X] wifi_level
 // [ ] provisioning
+// [ ] Manufacturing onboarding
 // [ ] file storage
 // [ ] deep sleep
 // [ ] optimise battery - Compress and limit wifi broadcast, limited leds, sensors off after initial reading etc.
 //
 
-#define CURRENT_VERSION VERSION
-
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net" //TODO: move to config file
+#define ONBOARD_API_ENDPOINT "/onboardDevice"
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
 #define DEBUG_API_ENDPOINT "/debug"
+#define CONFIG_FILENAME "/config.json"
 
-#define PUBLISH_DEVICE_CYCLES 1            // number of restarts before publishing device status
-int rebootsSinceLastDevicePost = 0;
+#define ONBOARD_SSID "Galactica"
+#define ONBOARD_PASSWORD "archiefifi"
 
-#define DEBUG_INFO  0
-#define DEBUG_WARN  1
-#define DEBUG_ERROR 2
-#define OTA_DEBUG
-#define USE_SERIAL Serial
+#define WATER_TEMP_SENSOR "water_temp"
 
-uint32_t lastDebugPostTimestamp = 0;
+#define PUBLISH_DEVICE_CYCLES 0 // number of restarts before publishing device status
 
-OneWire oneWire(D1);
-DallasTemperature sensors(&oneWire);
-double currentTemp = 0.0;
+#define DEBUG Serial
 
+OneWire oneWire(TEMP_SENSOR_PIN);
+DallasTemperature dallas_sensors(&oneWire);
 
 // System
-
-const char *sensorType = "water_temp";
 char device_chipId[13];
-double batt_level;
+
 int errorsSinceLastDevicePost = 0;
-
-
+int rebootsSinceLastDevicePost = 0;
 
 // User
+const char *device_id;
+const char *user_id;
 const char *userId = "testUserA";
-char ssid[] = "Galactica";
+S ssid[] = "Galactica";
 char password[] = "archiefifi";
-//TODO: Wifi needs to be encryped and loaded from EEPROM.
 
+void setChipString()
+{
+  uint64_t chipid;
+  chipid = ESP.getChipId();
+  uint16_t chip = (uint16_t)(chipid >> 32);
+  snprintf(device_chipId, 13, "%04X%08X", chip, (uint32_t)chipid);
+}
 
-void setChipString();
+void onboard();
+void loadConfig();
 int wifiStrengthInBars();
 void connectToWifi();
-bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
-void publishTemp();
+String HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
+void publishTemp(double temp);
 void device_Maintance();
 void publishDeviceStatus();
 String getDownloadUrl();
 bool downloadUpdate(String url);
 
+/*   STATES
+Not_onboarded: config.json does not exist and doesn't contains serial_id
+onboard: config.json exists but does not contain user_id && wifi credentials are not setup
+provisioned: config.json excists, contains serial_id and user_id and wifi creds are setup
+has_errors: normally wifi connection issues.
+
+enum states
+{
+  not_onboarded,
+  onboarded,
+  provisioned,
+  has_errors
+}
+*/
+
+void FSDirectory()
+{
+  String str = "Directory: ";
+  Dir dir = SPIFFS.openDir("/");
+  while (dir.next())
+  {
+    str += dir.fileName();
+    str += " / ";
+    str += dir.fileSize();
+    str += "\r\n";
+  }
+  Serial.print(str);
+}
+
+void FSInfoPeek()
+{
+  FSInfo fs_info;
+  SPIFFS.info(fs_info);
+  DEBUG.print("SPIFSS totalBytes :");
+  DEBUG.print(fs_info.totalBytes);
+}
+
 void setup()
 {
-  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(STATUS_LED, OUTPUT);
 
   Serial.begin(115200);
-  delay(10);
+  delay(50);
   setChipString();
 
-  // Are we freshly flashed? And need to send chipID to firestore? - This will be done over usb. Test sensor & battery.
-  // Are we provisioned?  Ie. Have a username, ssid and password?
+  SPIFFS.begin() ? DEBUG.println("File System Started") : DEBUG.println("File System Begin Error");
+  SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
 
-  sensors.begin(); // Start sampling Temperature
+  if (user_id == nullptr)
+  {
+    DEBUG.println("\nNo USER_ID, sleeping forever");
+    delay(300);
+    ESP.deepSleep(0);
+  }
 
   connectToWifi();
+  dallas_sensors.begin(); // Start sampling Temperature
+}
+
+/*  ONBOARD  
+  - Test sensors, build JSON, and PUT onboardDevice
+  - Receive a device_id as response
+  - Store device_id in /config.json
+  - Deep sleep for a long time   */
+
+void onboard()
+{
+  DEBUG.print("*** Onboarding *** \nFormatting SPIFFS...");
+  SPIFFS.format() ? DEBUG.println("Success") : DEBUG.println("Failed");
+  FSInfoPeek();
+
+  // bool format = SPIFFS.format();
+  //(format) ? DEBUG.println("Completed") : DEBUG.print("FAILED");
+
+  DEBUG.print("Connecting to WIFI.");
+  WiFi.begin(ONBOARD_SSID, ONBOARD_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    DEBUG.print(".");
+    delay(300);
+  }
+  DEBUG.println("Success");
+
+  DEBUG.print("Confirming Sensor count...");
+  dallas_sensors.begin();
+  (dallas_sensors.getDeviceCount() == 1) ? DEBUG.println("Success") : DEBUG.println("FAILED");
+  char temp_buf[64];
+  sprintf(temp_buf, "%2.1f", dallas_sensors.getTempCByIndex(0));
+  int vcc = analogRead(BATT_ADC_PIN);
+
+  String JSONmessage;
+  DynamicJsonDocument doc(400);
+  doc["product"] = PRODUCT;
+  doc["chip_id"] = device_chipId;
+  doc[WATER_TEMP_SENSOR] = temp_buf;
+  doc["batt_vcc"] = vcc;
+  doc["firmwareVersion"] = VERSION;
+  doc["wifi_strength"] = WiFi.RSSI();
+  doc["mac_address"] = WiFi.macAddress();
+  serializeJson(doc, JSONmessage);
+
+  String response = HttpJSONStringToEndPoint(JSONmessage, ONBOARD_API_ENDPOINT);
+  if (response == "")
+  {
+    DEBUG.println("FATAL ERROR: Onboarding did not recieve a valid device_id");
+    ESP.deepSleep(0);
+  }
+  else
+  {
+    // Create config and Write to SPIFFS
+    DynamicJsonDocument fsDoc(100);
+    String fsString;
+    fsDoc["device_id"] = response;
+    serializeJson(fsDoc, fsString);
+    DEBUG.println(fsString);
+
+    File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
+    DEBUG.print(F("Serializing to file. Size = "));
+    uint16 size = serializeJson(fsDoc, configFile);
+    DEBUG.println(size);
+    configFile.close();
+
+    delay(1000);
+  }
+
+  SPIFFS.end();
+
+  // Sleep forever
+  DEBUG.println("Entering Deep Sleep");
+  ESP.deepSleep(0);
+}
+
+void loadConfig()
+{
+  DEBUG.print("Load Config.json....");
+  File configFile = SPIFFS.open(CONFIG_FILENAME, "r");
+
+  size_t size = configFile.size();
+  std::unique_ptr<char[]> buf(new char[size]);
+
+  StaticJsonDocument<100> doc;
+  DeserializationError error = deserializeJson(doc, configFile);
+  if (error)
+  {
+    Serial.println(F("Error: deserializeJson"));
+    Serial.println(error.c_str());
+  }
+  Serial.print(F("serializeJson = "));
+  serializeJson(doc, Serial);
+  configFile.close();
+
+  device_id = doc["device_id"];
+  user_id = doc["user_id"];
 }
 
 void loop()
 {
   digitalWrite(LED_BUILTIN, HIGH);
 
-  sensors.requestTemperatures(); // sample temp
-  currentTemp = sensors.getTempCByIndex(0);
-  publishTemp();
+  dallas_sensors.requestTemperatures(); // sample temp
+  double currentTemp = dallas_sensors.getTempCByIndex(0);
+  publishTemp(currentTemp);
 
   if (currentTemp > -50.0 && currentTemp < 100.0)
   {
-    
   }
   else
   {
-    USE_SERIAL.println("Error: Temp out of bounds");
-    USE_SERIAL.println(currentTemp);
-    publishTemp();
+    DEBUG.print("Error: Temp out of bounds ");
+    DEBUG.println(currentTemp);
   }
 
   // every X amount of data samples run device_maintance to check batt / wifi / updates
-  if (rebootsSinceLastDevicePost == PUBLISH_DEVICE_CYCLES) {
+  if (rebootsSinceLastDevicePost == PUBLISH_DEVICE_CYCLES)
+  {
     rebootsSinceLastDevicePost = 0;
     device_Maintance();
-  } else {
+  }
+  else
+  {
     rebootsSinceLastDevicePost++;
   }
 
@@ -138,73 +281,51 @@ void loop()
   delay(15000);
 }
 
-void setChipString()
+void publishTemp(double temp)
 {
-  uint64_t chipid;
-  chipid = ESP.getChipId();
-  uint16_t chip = (uint16_t)(chipid >> 32);
-  snprintf(device_chipId, 13, "%04X%08X", chip, (uint32_t)chipid);
-}
-
-void publishTemp()
-{
-  char temp_buf[64];
-  sprintf(temp_buf, "%2.1f", currentTemp);
-  USE_SERIAL.println("Publishing Temp");
-  Serial.println(currentTemp);
-
-  // Create JSON String
+  String JSONmessage;
   DynamicJsonDocument doc(400);
+  char temp_buf[64];
+
+  sprintf(temp_buf, "%2.1f", temp);
+  DEBUG.print("Publishing Temperature: ");
+  Serial.println(temp);
 
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
   doc["product"] = PRODUCT;
-  doc["sensor"] = sensorType;
-  doc["data"] = temp_buf;
 
-  String JSONmessage;
+  JsonObject data = doc.createNestedObject("data");
+  data[WATER_TEMP_SENSOR] = temp_buf;
+
   serializeJson(doc, JSONmessage);
-  //USE_SERIAL.println(JSONmessage);
+  DEBUG.println(JSONmessage);
 
-  if (!HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT))
-  {
-    USE_SERIAL.println("JSON Post failed");
-    errorsSinceLastDevicePost++;
-  }
+  HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT);
 }
 
 void publishDeviceStatus()
 {
-  int vcc = ESP.getVcc();
-
-  //analogRead(A0);
-
+  int vcc = analogRead(BATT_ADC_PIN);
   DynamicJsonDocument doc(400);
+  String JSONmessage;
+
+  DEBUG.println("Publish Device Status");
+
   doc["user_id"] = userId;
   doc["device_id"] = device_chipId;
   doc["product"] = PRODUCT;
   doc["batt_level"] = "TODO";
   doc["wifi_strength"] = wifiStrengthInBars();
   doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
-  doc["firmwareVersion"] = CURRENT_VERSION;
+  doc["firmwareVersion"] = VERSION;
   doc["vcc"] = vcc;
-
-  String JSONmessage;
   serializeJson(doc, JSONmessage);
-  //Serial.println(JSONmessage);
-
-  if (!HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT))
-  {
-    USE_SERIAL.println("JSON Post failed");
-    errorsSinceLastDevicePost++;
-  }
-  else
-  {
-    errorsSinceLastDevicePost = 0;
-  }
+  //USE_SERIAL.println(JSONmessage);
+  HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT);
 }
 
-bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
+String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
   if (WiFi.status() == WL_CONNECTED)
   {
@@ -214,31 +335,32 @@ bool HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
     https.begin(secureClient, API_SERVER_URL, 443, endPoint, true);
     https.addHeader("Content-Type", "application/json");
 
+    DEBUG.print("PUT json.... ");
     int httpResponseCode = https.POST(JSONString);
+    DEBUG.println(httpResponseCode);
+    String response = https.getString();
+    DEBUG.println(response);
+    https.end();
+    secureClient.stop();
 
-    if (httpResponseCode > 0)
+    if (httpResponseCode == 201)
     {
-      String response = https.getString();
-      //USE_SERIAL.println(httpResponseCode);
-      //USE_SERIAL.println(response);
+      return response;
     }
     else
     {
-      USE_SERIAL.print("Error on sending PUT Request: ");
-      USE_SERIAL.println(httpResponseCode);
-      String response = https.getString();
+      DEBUG.print("Error on sending PUT Request: ");
       errorsSinceLastDevicePost++;
-      return false;
+      return "";
     }
-    https.end();
-    secureClient.stop();
-    return true;
+
+    return "";
   }
   else
   {
-    USE_SERIAL.println("Trying to send JSON, but Wifi is not connected");
+    DEBUG.println("Trying to send JSON, but Wifi is not connected");
     errorsSinceLastDevicePost++;
-    return false;
+    return "";
   }
 }
 
@@ -247,11 +369,10 @@ int wifiStrengthInBars()
   long RSSI = WiFi.RSSI();
   int bars;
 
-  if ((RSSI > -55))
-  {
+  if (RSSI > -55)
     bars = 5;
-  }
-  else if ((RSSI < -55) & (RSSI > -65))
+
+  if ((RSSI < -55) & (RSSI > -65))
   {
     bars = 4;
   }
@@ -274,21 +395,21 @@ int wifiStrengthInBars()
   return bars;
 }
 
-void connectToWifi()
+bool connectToWifi(string ssid, String password)
 {
   WiFi.begin(ssid, password);
   int i = 0;
   while (WiFi.status() != WL_CONNECTED)
   { // Wait for the Wi-Fi to connect
-  i++;
-  if (i == 1000) {
-    USE_SERIAL.println("Unable to connect to Wifi: 1000 Attempts");
-    // TODO: Decide how to handle this
-  }
+    i++;
+    if (i == 1000)
+    {
+      DEBUG.println("Unable to connect to Wifi after 1000 attempts");
+      // TODO: Decide how to handle this
+    }
     delay(1000);
   }
-  USE_SERIAL.println("Wifi Connection Established!");
-
+  DEBUG.println("Wifi Connection Established!");
 }
 
 void device_Maintance()
@@ -302,7 +423,7 @@ void device_Maintance()
     bool success = downloadUpdate(downloadUrl);
     if (!success)
     {
-      USE_SERIAL.println("Device update failed.");
+      DEBUG.println("Device update failed.");
     }
   }
 }
@@ -312,65 +433,56 @@ void device_Maintance()
  */
 String getDownloadUrl()
 {
-  //USE_SERIAL.print("Checking for new firmware version. ");
-
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
-  String downloadUrl;
-
   String url = FIRMWARE_URL;
-  url += String("?version=") + CURRENT_VERSION;
-  url += String("&variant=") + VARIANT;
+  url += String("?version=") + VERSION;
+  url += String("&release=") + RELEASE;
   url += String("&product=") + PRODUCT;
+
+  DEBUG.print("Checking for new firmware version...");
   https.begin(secureClient, API_SERVER_URL, 443, url, true);
   int httpCode = https.GET();
+  https.end();
 
   if (httpCode > 0)
   {
     if (httpCode == HTTP_CODE_OK)
     {
+      DEBUG.print("New firmware available: ");
       String payload = https.getString();
-      USE_SERIAL.println(payload);
-      downloadUrl = payload;
-      return downloadUrl;
+      DEBUG.println(payload);
+      return payload;
     }
     else
     {
-   //   USE_SERIAL.println("Device is up to date.");
+      DEBUG.println("Device is up to date.");
       return "";
     }
   }
   else
   {
-    USE_SERIAL.printf("Unable to download firmware URL, error: %s\n", https.errorToString(httpCode).c_str());
+    DEBUG.printf("Unable to download firmware URL, error: %s\n", https.errorToString(httpCode).c_str());
     return "";
   }
-  https.end();
-  return downloadUrl;
 }
 
 bool downloadUpdate(String url)
 {
-  // URL is sent as a JSON object... So deserialise it.
-
+  DEBUG.print("Downloading Update...");
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, url);
 
   if (error)
   {
-    USE_SERIAL.print(F("deserializeJson() failed: "));
-    USE_SERIAL.println(error.c_str());
+    DEBUG.print(F("deserializeJson() failed: "));
+    DEBUG.println(error.c_str());
     return false;
   }
 
   const char *baseURL = doc["baseURL"];
   const char *path = doc["path"];
-
-  //USE_SERIAL.println("Beginning download Base: ");
-  //USE_SERIAL.println(baseURL);
-  //USE_SERIAL.println("Path: ");
-  //USE_SERIAL.println(path);
 
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
@@ -378,75 +490,54 @@ bool downloadUpdate(String url)
 
   https.begin(secureClient, baseURL, 443, path, true);
 
-  USE_SERIAL.printf(". ");
   // start connection and send HTTP header
   int httpCode = https.GET();
-
-  USE_SERIAL.print("HTTP Code:");
-  USE_SERIAL.println(httpCode);
-  String response = https.getString();
-  USE_SERIAL.println(response);
-
   if (httpCode > 0)
   {
-    // HTTP header has been send and Server response header has been handled
-   // USE_SERIAL.printf("[HTTP] GET... code: %d\n", httpCode);
-
     // file found at server
     if (httpCode == HTTP_CODE_OK)
     {
       size_t contentLength = https.getSize();
-     // USE_SERIAL.println("contentLength : " + String(contentLength));
 
       if (contentLength > 0)
       {
         bool canBegin = Update.begin(contentLength, U_FLASH);
         if (canBegin)
         {
-          USE_SERIAL.println("Beginning OTA update. This may take 2 - 5 mins to complete. Things might be quiet for a while.. Patience!");
+          DEBUG.print("Beginning OTA update...");
           size_t written = Update.writeStream(https.getStream());
-          //size_t written = 0;
-          if (written == contentLength)
-          {
-          //  USE_SERIAL.println("Written : " + String(written) + " successfully");
-          }
-          else
-          {
-         //   USE_SERIAL.println("Written only : " + String(written) + "/" + String(contentLength) + ". Retry?");
-          }
+          (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
 
           if (Update.end())
           {
-            USE_SERIAL.println("OTA done!");
+            DEBUG.println("Download complete!");
             if (Update.isFinished())
             {
-              USE_SERIAL.println("Update successfully completed. Rebooting.");
+              DEBUG.println("Update successfully completed. Rebooting.");
               ESP.restart();
               return true;
             }
             else
             {
-              USE_SERIAL.println("Update not finished. Something went wrong!");
+              DEBUG.println("Update not finished. Something went wrong!");
               return false;
             }
           }
           else
           {
-            USE_SERIAL.println("Error Occurred. Error #: " + String(Update.getError()));
+            DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
             return false;
           }
         }
         else
         {
-          USE_SERIAL.println("Not enough space to begin OTA");
-          //   client.flush();    <- not sure what flush is
+          DEBUG.println("Not enough space to begin OTA");
           return false;
         }
       }
       else
       {
-        USE_SERIAL.println("There was no content in the response");
-        //   client.flush();
+        DEBUG.println("There was no content in the response");
         return false;
       }
     }
@@ -460,4 +551,3 @@ bool downloadUpdate(String url)
     return false;
   }
 }
-

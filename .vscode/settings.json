@@ -4,7 +4,9 @@
         "PLATFORMIO_CALLER": "vscode"
     },
     "files.associations": {
-        "vector": "cpp"
+        "vector": "cpp",
+        "array": "cpp",
+        "string": "cpp"
     },
     "C_Cpp.errorSquiggles": "Disabled"
 }

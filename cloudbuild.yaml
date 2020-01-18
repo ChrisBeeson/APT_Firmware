@@ -4,7 +4,7 @@ steps:
   args: ['run']  
 artifacts: 
   objects: 
-    location: 'gs://pooltemp_ota_firmware/$TAG_NAME'
-    paths: ['.pioenvs/d1/firmware_d1.bin']
+    location: 'gs://apt_firmware/$TAG_NAME'
+    paths: ['.pioenvs/APT01/APT01_firmware.bin']
 
     
