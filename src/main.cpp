@@ -42,6 +42,7 @@
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net" //TODO: move to config file
 #define ONBOARD_API_ENDPOINT "/onboardDevice"
+#define USER_FOR_DEVICE_API_ENDPOINT "/userForDevice"
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
 #define DEBUG_API_ENDPOINT "/debug"
@@ -50,9 +51,10 @@
 #define ONBOARD_SSID "Galactica"
 #define ONBOARD_PASSWORD "archiefifi"
 
+#define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
 
-#define PUBLISH_DEVICE_CYCLES 0 // number of restarts before publishing device status
+#define PUBLISH_DEVICE_CYCLES 2 // number of restarts before publishing device status
 
 #define DEBUG Serial
 
@@ -66,11 +68,8 @@ int errorsSinceLastDevicePost = 0;
 int rebootsSinceLastDevicePost = 0;
 
 // User
-const char *device_id;
-const char *user_id;
-const char *userId = "testUserA";
-const char *ssid = "Galactica";
-const char *password = "archiefifi";
+String device_id;
+String user_id;
 
 void setChipString()
 {
@@ -82,10 +81,11 @@ void setChipString()
 
 void onboard();
 void loadConfig();
+void provision();
 int wifiStrengthInBars();
 bool connectToWifi(String ssid, String password);
 String HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
-void publishTemp(double temp);
+void publishTemperature();
 void device_Maintance();
 void publishDeviceStatus();
 String getDownloadUrl();
@@ -117,7 +117,7 @@ void FSDirectory()
     str += dir.fileSize();
     str += "\r\n";
   }
-  Serial.print(str);
+  DEBUG.print(str);
 }
 
 void FSInfoPeek()
@@ -139,17 +139,25 @@ void setup()
   SPIFFS.begin() ? DEBUG.println("File System Started") : DEBUG.println("File System Begin Error");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
 
-  if (user_id == nullptr)
+  if (device_id == nullptr || device_id == "null")
   {
-    DEBUG.println("\nNo USER_ID, start wifiManager");
-    delay(300);
-    WiFiManager wifiManager;
-   //wifiManager.resetSettings();
-    wifiManager.autoConnect("Pool Thermometer");
-    DEBUG.print("Connected!");
+    DEBUG.println("FATAL ERROR: Device does not have a device_id");
+    ESP.deepSleep(0);
   }
 
- // connectToWifi();
+  if (user_id == "null")
+    provision();
+
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    WiFiManager wifiManager;
+    while (WiFi.status() != WL_CONNECTED)
+    {
+      delay(100);
+    };
+  }
+
+  //connectToWifi();
   dallas_sensors.begin(); // Start sampling Temperature
 }
 
@@ -157,11 +165,6 @@ void onboard()
 {
   DEBUG.print("*** Onboarding *** \nFormatting SPIFFS...");
   SPIFFS.format() ? DEBUG.println("Success") : DEBUG.println("Failed");
-  FSInfoPeek();
-
-  // bool format = SPIFFS.format();
-  //(format) ? DEBUG.println("Completed") : DEBUG.print("FAILED");
-
   DEBUG.print("Connecting to WIFI.");
   WiFi.begin(ONBOARD_SSID, ONBOARD_PASSWORD);
   while (WiFi.status() != WL_CONNECTED)
@@ -198,24 +201,17 @@ void onboard()
   else
   {
     // Create config and Write to SPIFFS
-    DynamicJsonDocument fsDoc(100);
-    String fsString;
+    StaticJsonDocument<100> fsDoc;
     fsDoc["device_id"] = response;
-    serializeJson(fsDoc, fsString);
-    DEBUG.println(fsString);
-
     File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
     DEBUG.print(F("Serializing to file. Size = "));
     uint16 size = serializeJson(fsDoc, configFile);
     DEBUG.println(size);
     configFile.close();
-
     delay(1000);
   }
 
   SPIFFS.end();
-
-  // Sleep forever
   DEBUG.println("Entering Deep Sleep");
   ESP.deepSleep(0);
 }
@@ -232,101 +228,110 @@ void loadConfig()
   DeserializationError error = deserializeJson(doc, configFile);
   if (error)
   {
-    Serial.println(F("Error: deserializeJson"));
-    Serial.println(error.c_str());
+    DEBUG.println(F("Error: deserializeJson"));
+    DEBUG.println(error.c_str());
   }
-  Serial.print(F("serializeJson = "));
+  DEBUG.print(F("serializeJson = "));
   serializeJson(doc, Serial);
+  DEBUG.println("\n");
   configFile.close();
 
-  device_id = doc["device_id"];
-  user_id = doc["user_id"];
+  device_id = doc["device_id"].as<String>();
+  user_id = doc["user_id"].as<String>();
+}
+
+void provision()
+{
+  DEBUG.println("\nNo USER_ID, We need to provision - starting wifiManager");
+  delay(300);
+  WiFiManager wifiManager;
+  //wifiManager.resetSettings();
+  wifiManager.autoConnect(AP_NAME);
+  DEBUG.println("Connected.... Trying to retreive User for this device");
+  String JSONmessage;
+  StaticJsonDocument<100> doc;
+  doc["device_id"] = device_id;
+  serializeJson(doc, JSONmessage);
+  DEBUG.println(JSONmessage);
+
+  String response = HttpJSONStringToEndPoint(JSONmessage, USER_FOR_DEVICE_API_ENDPOINT);
+  if (response != "")
+  {
+    StaticJsonDocument<100> fsDoc;
+    fsDoc["device_id"] = device_id;
+    fsDoc["user_id"] = response;
+    File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
+    DEBUG.print(F("Serializing to file. Size = "));
+    uint16 size = serializeJson(fsDoc, configFile);
+    DEBUG.println(size);
+    configFile.close();
+    delay(1000);
+    user_id = response;
+    publishDeviceStatus();
+  }
+  DEBUG.println(response);
 }
 
 void loop()
 {
-  digitalWrite(LED_BUILTIN, HIGH);
+  //digitalWrite(LED_BUILTIN, HIGH);
 
-  dallas_sensors.requestTemperatures(); // sample temp
-  double currentTemp = dallas_sensors.getTempCByIndex(0);
-  publishTemp(currentTemp);
-
-  if (currentTemp > -50.0 && currentTemp < 100.0)
+  if (user_id != "null")
   {
-  }
-  else
-  {
-    DEBUG.print("Error: Temp out of bounds ");
-    DEBUG.println(currentTemp);
-  }
-
-  // every X amount of data samples run device_maintance to check batt / wifi / updates
-  if (rebootsSinceLastDevicePost == PUBLISH_DEVICE_CYCLES)
-  {
-    rebootsSinceLastDevicePost = 0;
+    publishTemperature();
     device_Maintance();
   }
   else
   {
-    rebootsSinceLastDevicePost++;
+    DEBUG.println("! User_id is null - not publishing anything !");
   }
 
-  // Close wifi
   //Wifi.end();
-
-  // Sleep
-  //  System.sleep(SLEEP_MODE_DEEP,60*15);  //15 mins
-  digitalWrite(LED_BUILTIN, LOW);
+  //System.sleep(SLEEP_MODE_DEEP,60*15);  //15 mins
 
   delay(15000);
 }
 
-void publishTemp(double temp)
+void publishTemperature()
 {
+  dallas_sensors.requestTemperatures();
+
   String JSONmessage;
-  DynamicJsonDocument doc(400);
-  char temp_buf[64];
-
-  sprintf(temp_buf, "%2.1f", temp);
-  DEBUG.print("Publishing Temperature: ");
-  Serial.println(temp);
-
-  doc["user_id"] = userId;
-  doc["device_id"] = device_chipId;
+  StaticJsonDocument<400> doc;
+  doc["user_id"] = user_id;
+  doc["device_id"] = device_id;
   doc["product"] = PRODUCT;
-
-  JsonObject data = doc.createNestedObject("data");
-  data[WATER_TEMP_SENSOR] = temp_buf;
-
+  JsonObject data = doc.createNestedObject("sensors");
+  data[WATER_TEMP_SENSOR] = dallas_sensors.getTempCByIndex(0);
   serializeJson(doc, JSONmessage);
   DEBUG.println(JSONmessage);
 
-  HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT);
+  if (HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT) != "")
+  {
+    DEBUG.println(" Success");
+  }
 }
 
 void publishDeviceStatus()
 {
-  int vcc = analogRead(BATT_ADC_PIN);
-  DynamicJsonDocument doc(400);
+  DEBUG.print("Publish Device Status...");
+  StaticJsonDocument<400> doc;
   String JSONmessage;
-
-  DEBUG.println("Publish Device Status");
-
-  doc["user_id"] = userId;
-  doc["device_id"] = device_chipId;
+  doc["user_id"] = user_id;
+  doc["device_id"] = device_id;
   doc["product"] = PRODUCT;
-  doc["batt_level"] = "TODO";
-  doc["wifi_strength"] = wifiStrengthInBars();
-  doc["errorsSinceLastDevicePost"] = errorsSinceLastDevicePost;
-  doc["firmwareVersion"] = VERSION;
-  doc["vcc"] = vcc;
+  doc["batt_level"] = analogRead(BATT_ADC_PIN);
+  doc["wifi_strength"] = WiFi.RSSI();
+  doc["firmware_version"] = VERSION;
   serializeJson(doc, JSONmessage);
-  //USE_SERIAL.println(JSONmessage);
-  HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT);
+  DEBUG.println(JSONmessage);
+  if (HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT) != "")
+    DEBUG.println("Success");
 }
 
 String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
+  DEBUG.print("JSON POST... ");
   if (WiFi.status() == WL_CONNECTED)
   {
     HTTPClient https;
@@ -334,22 +339,21 @@ String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
     secureClient.setInsecure();
     https.begin(secureClient, API_SERVER_URL, 443, endPoint, true);
     https.addHeader("Content-Type", "application/json");
-
-    DEBUG.print("PUT json.... ");
     int httpResponseCode = https.POST(JSONString);
-    DEBUG.println(httpResponseCode);
     String response = https.getString();
-    DEBUG.println(response);
+
     https.end();
     secureClient.stop();
 
-    if (httpResponseCode == 201)
+    if (httpResponseCode >= 200 && httpResponseCode < 205)
     {
       return response;
     }
     else
     {
-      DEBUG.print("Error on sending PUT Request: ");
+      DEBUG.print("Error! ");
+      DEBUG.println(httpResponseCode);
+      DEBUG.println(response);
       errorsSinceLastDevicePost++;
       return "";
     }
@@ -358,41 +362,10 @@ String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
   }
   else
   {
-    DEBUG.println("Trying to send JSON, but Wifi is not connected");
+    DEBUG.println("ERROR: Wifi is not connected");
     errorsSinceLastDevicePost++;
     return "";
   }
-}
-
-int wifiStrengthInBars()
-{
-  long RSSI = WiFi.RSSI();
-  int bars;
-
-  if (RSSI > -55)
-    bars = 5;
-
-  if ((RSSI < -55) & (RSSI > -65))
-  {
-    bars = 4;
-  }
-  else if ((RSSI < -65) & (RSSI > -70))
-  {
-    bars = 3;
-  }
-  else if ((RSSI < -70) & (RSSI > -78))
-  {
-    bars = 2;
-  }
-  else if ((RSSI < -78) & (RSSI > -82))
-  {
-    bars = 1;
-  }
-  else
-  {
-    bars = 0;
-  }
-  return bars;
 }
 
 bool connectToWifi(String ssid, String password)
@@ -406,7 +379,7 @@ bool connectToWifi(String ssid, String password)
     {
       DEBUG.println("Unable to connect to Wifi after 1000 attempts");
       // TODO: Decide how to handle this
-        return false;
+      return false;
     }
     delay(1000);
   }
@@ -417,18 +390,18 @@ bool connectToWifi(String ssid, String password)
 
 void device_Maintance()
 {
-  publishDeviceStatus();
-
-  // Check if we need to download a new version
-  String downloadUrl = getDownloadUrl();
-  if (downloadUrl.length() > 0)
+  if (rebootsSinceLastDevicePost == PUBLISH_DEVICE_CYCLES)
   {
-    bool success = downloadUpdate(downloadUrl);
-    if (!success)
-    {
-      DEBUG.println("Device update failed.");
-    }
+    rebootsSinceLastDevicePost = 0;
+    publishDeviceStatus();
+
+    // OTA Update - is there a new version?
+    String downloadUrl = getDownloadUrl();
+    if (downloadUrl.length() > 0)
+      downloadUpdate(downloadUrl);
   }
+
+  rebootsSinceLastDevicePost++;
 }
 
 /* 
@@ -490,7 +463,6 @@ bool downloadUpdate(String url)
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
-
   https.begin(secureClient, baseURL, 443, path, true);
 
   // start connection and send HTTP header
