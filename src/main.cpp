@@ -131,9 +131,10 @@ void FSInfoPeek()
 void setup()
 {
   pinMode(STATUS_LED, OUTPUT);
-
   Serial.begin(115200);
   delay(50);
+  DEBUG.print('APT Firmware Version: ');
+  DEBUG.println(VERSION);
   setChipString();
 
   SPIFFS.begin() ? DEBUG.println("File System Started") : DEBUG.println("File System Begin Error");
@@ -165,6 +166,7 @@ void onboard()
 {
   DEBUG.print("*** Onboarding *** \nFormatting SPIFFS...");
   SPIFFS.format() ? DEBUG.println("Success") : DEBUG.println("Failed");
+
   DEBUG.print("Connecting to WIFI.");
   WiFi.begin(ONBOARD_SSID, ONBOARD_PASSWORD);
   while (WiFi.status() != WL_CONNECTED)
@@ -191,7 +193,6 @@ void onboard()
   doc["wifi_strength"] = WiFi.RSSI();
   doc["mac_address"] = WiFi.macAddress();
   serializeJson(doc, JSONmessage);
-
   String response = HttpJSONStringToEndPoint(JSONmessage, ONBOARD_API_ENDPOINT);
   if (response == "")
   {
