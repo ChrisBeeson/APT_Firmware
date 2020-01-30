@@ -2,8 +2,6 @@
 #include "Esp.h"
 #include <WiFiClientSecure.h>
 #include <WiFiClientSecureBearSSL.h>
-#include <ESP8266WiFiMulti.h>
-#include <WiFiUdp.h>
 #include <ESP8266WiFiType.h>
 #include <CertStoreBearSSL.h>
 #include <ESP8266WiFiAP.h>
@@ -29,14 +27,14 @@
 //TODO:
 // [X] OTA updates Xf
 // [ ] OTA console monitoring
-// [ ] batt_level
+// [X] batt_level
 // [X] device posts
 // [X] wifi_level
-// [ ] provisioning
+// [X] provisioning
 // [x] Manufacturing onboarding
 // [x] file storage
 // [x] deep sleep
-// [ ] optimise battery - Compress and limit wifi broadcast, limited leds, sensors off after initial reading etc.
+// [X] optimise battery - Compress and limit wifi broadcast, limited leds, sensors off after initial reading etc.
 //
 
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
@@ -54,7 +52,7 @@
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
 
-#define PUBLISH_DEVICE_CYCLES 2 // number of restarts before publishing device status
+#define PUBLISH_DEVICE_CYCLES 1 // number of restarts before publishing device status
 
 #define DEBUG Serial
 
@@ -63,7 +61,6 @@ DallasTemperature dallas_sensors(&oneWire);
 
 // System
 char device_chipId[13];
-
 int errorsSinceLastDevicePost = 0;
 int rebootsSinceLastDevicePost = 0;
 
@@ -132,10 +129,10 @@ void setup()
 {
   pinMode(STATUS_LED, OUTPUT);
   Serial.begin(115200);
-  delay(50);
-  DEBUG.print('APT Firmware Version: ');
-  DEBUG.println(VERSION);
+  delay(350);
   setChipString();
+  DEBUG.print("\nAPT Firmware Version: ");
+  DEBUG.println(VERSION);
 
   SPIFFS.begin() ? DEBUG.println("File System Started") : DEBUG.println("File System Begin Error");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
@@ -146,19 +143,19 @@ void setup()
     ESP.deepSleep(0);
   }
 
-  if (user_id == "null")
+  if (user_id == nullptr || user_id == "null")
     provision();
 
-  if (WiFi.status() != WL_CONNECTED)
-  {
-    WiFiManager wifiManager;
-    while (WiFi.status() != WL_CONNECTED)
-    {
-      delay(100);
-    };
-  }
+  DEBUG.print("Connecting to wifi.");
 
-  //connectToWifi();
+  WiFiManager wifiManager;
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(300);
+    DEBUG.print(".");
+  };
+
+  DEBUG.println("Connected.");
   dallas_sensors.begin(); // Start sampling Temperature
 }
 
@@ -315,7 +312,7 @@ void publishTemperature()
 
 void publishDeviceStatus()
 {
-  DEBUG.print("Publish Device Status...");
+  DEBUG.println("Publish Device Status: ");
   StaticJsonDocument<400> doc;
   String JSONmessage;
   doc["user_id"] = user_id;
@@ -418,31 +415,29 @@ String getDownloadUrl()
   url += String("&release=") + RELEASE;
   url += String("&product=") + PRODUCT;
 
-  DEBUG.print("Checking for new firmware version...");
+  DEBUG.print("Checking for new firmware version... ");
   https.begin(secureClient, API_SERVER_URL, 443, url, true);
   int httpCode = https.GET();
-  https.end();
+  String returnString;
 
-  if (httpCode > 0)
+  switch (httpCode)
   {
-    if (httpCode == HTTP_CODE_OK)
-    {
-      DEBUG.print("New firmware available: ");
-      String payload = https.getString();
-      DEBUG.println(payload);
-      return payload;
-    }
-    else
-    {
-      DEBUG.println("Device is up to date.");
-      return "";
-    }
-  }
-  else
-  {
+  case 200:
+    returnString = https.getString();
+    DEBUG.println("New firmware available! ");
+    break;
+
+  case 204:
+    DEBUG.println("Device is up to date.");
+    returnString = "";
+    break;
+
+  default:
     DEBUG.printf("Unable to download firmware URL, error: %s\n", https.errorToString(httpCode).c_str());
-    return "";
+    returnString = "";
   }
+  https.end();
+  return returnString;
 }
 
 bool downloadUpdate(String url)
@@ -453,14 +448,12 @@ bool downloadUpdate(String url)
 
   if (error)
   {
-    DEBUG.print(F("deserializeJson() failed: "));
-    DEBUG.println(error.c_str());
+    DEBUG.print(error.c_str());
     return false;
   }
 
   const char *baseURL = doc["baseURL"];
   const char *path = doc["path"];
-
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
@@ -468,62 +461,46 @@ bool downloadUpdate(String url)
 
   // start connection and send HTTP header
   int httpCode = https.GET();
-  if (httpCode > 0)
-  {
-    // file found at server
-    if (httpCode == HTTP_CODE_OK)
-    {
-      size_t contentLength = https.getSize();
+  if (httpCode == 0)
+    return false;
+  if (httpCode != HTTP_CODE_OK)
+    return false;
 
-      if (contentLength > 0)
-      {
-        bool canBegin = Update.begin(contentLength, U_FLASH);
-        if (canBegin)
-        {
-          DEBUG.print("Beginning OTA update...");
-          size_t written = Update.writeStream(https.getStream());
-          (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
+  size_t contentLength = https.getSize();
 
-          if (Update.end())
-          {
-            DEBUG.println("Download complete!");
-            if (Update.isFinished())
-            {
-              DEBUG.println("Update successfully completed. Rebooting.");
-              ESP.restart();
-              return true;
-            }
-            else
-            {
-              DEBUG.println("Update not finished. Something went wrong!");
-              return false;
-            }
-          }
-          else
-          {
-            DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
-            return false;
-          }
-        }
-        else
-        {
-          DEBUG.println("Not enough space to begin OTA");
-          return false;
-        }
-      }
-      else
-      {
-        DEBUG.println("There was no content in the response");
-        return false;
-      }
-    }
-    else
-    {
-      return false;
-    }
-  }
-  else
+  if (contentLength == 0)
   {
+    DEBUG.println("There was no content in the response");
     return false;
   }
+
+  bool canBegin = Update.begin(contentLength, U_FLASH);
+  if (!canBegin)
+  {
+    DEBUG.println("Not enough space to begin OTA");
+    return false;
+  }
+
+  DEBUG.print("Beginning OTA update...");
+  size_t written = Update.writeStream(https.getStream());
+  (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
+
+  if (!Update.end())
+  {
+    DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
+    return false;
+  }
+
+  DEBUG.println("Download complete!");
+
+  if (Update.isFinished())
+  {
+    DEBUG.println("Update successfully completed. Rebooting.");
+    ESP.restart();
+    return true;
+  }
+
+    DEBUG.println("Update not finished. Something went wrong!");
+    return false;
+  
 }
