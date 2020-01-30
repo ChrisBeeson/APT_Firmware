@@ -3,6 +3,7 @@
 #include <WiFiClientSecure.h>
 #include <WiFiClientSecureBearSSL.h>
 #include <ESP8266WiFiType.h>
+#include <ESP8266WiFiMulti.h>
 #include <CertStoreBearSSL.h>
 #include <ESP8266WiFiAP.h>
 #include <BearSSLHelpers.h>
@@ -461,10 +462,11 @@ bool downloadUpdate(String url)
 
   // start connection and send HTTP header
   int httpCode = https.GET();
-  if (httpCode == 0)
+
+  if (httpCode == 0 || httpCode != HTTP_CODE_OK) {
+    DEBUG.printf("Failed HTTPCode: %i",httpCode);
     return false;
-  if (httpCode != HTTP_CODE_OK)
-    return false;
+  }
 
   size_t contentLength = https.getSize();
 
