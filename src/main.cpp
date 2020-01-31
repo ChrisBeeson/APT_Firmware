@@ -1,29 +1,19 @@
+//
+// ANDRIS Pool Thermometer (APT01) wifi battery powered floating water temperature sensor.
+//
 
 #include "Esp.h"
+#include <FS.h>
+#include <string.h>
+#include <WiFiManager.h>
 #include <WiFiClientSecure.h>
 #include <WiFiClientSecureBearSSL.h>
 #include <ESP8266WiFiType.h>
-#include <ESP8266WiFiMulti.h>
-#include <CertStoreBearSSL.h>
-#include <ESP8266WiFiAP.h>
-#include <BearSSLHelpers.h>
-#include <ESP8266WiFiScan.h>
 #include <ESP8266WiFiGeneric.h>
-#include <ESP8266WiFiSTA.h>
-#include <WiFiClientSecureAxTLS.h>
 #include <ESP8266HTTPClient.h>
 #include <ArduinoJson.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
-#include <string.h>
-#include <FS.h>
-#include <WiFiManager.h>
-#include <DNSServer.h>
-#include <ESP8266WebServer.h>
-
-//
-// ANDRIS Pool Thermometer (APT01) wifi battery powered floating water temperature sensor.
-//
 
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net" //TODO: move to config file
@@ -33,15 +23,11 @@
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
 #define DEBUG_API_ENDPOINT "/debug"
 #define CONFIG_FILENAME "/config.json"
-
 #define ONBOARD_SSID "Galactica"
 #define ONBOARD_PASSWORD "archiefifi"
-
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
-
-#define PUBLISH_DEVICE_CYCLES 1 // number of restarts before publishing device status
-
+#define PUBLISH_DEVICE_CYCLES 1    // number of restarts before publishing device status
 #define DEBUG Serial
 
 OneWire oneWire(TEMP_SENSOR_PIN);
@@ -51,8 +37,6 @@ DallasTemperature dallas_sensors(&oneWire);
 char device_chipId[13];
 int errorsSinceLastDevicePost = 0;
 int rebootsSinceLastDevicePost = 0;
-
-// User
 String device_id;
 String user_id;
 
@@ -119,7 +103,7 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\nAPT Firmware Version: %s",VERSION);
+  DEBUG.printf("\nAPT Firmware Version: %s\n", VERSION);
 
   SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
@@ -200,6 +184,7 @@ void onboard()
   DEBUG.println("Entering Deep Sleep");
   ESP.deepSleep(0);
 }
+
 
 void loadConfig()
 {
@@ -429,7 +414,8 @@ String getDownloadUrl()
 
 bool downloadUpdate(String url)
 {
-  DEBUG.print("Downloading Update...");
+  DEBUG.println(url);
+  DEBUG.print("Downloading Update... ");
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, url);
 
@@ -441,6 +427,7 @@ bool downloadUpdate(String url)
 
   const char *baseURL = doc["baseURL"];
   const char *path = doc["path"];
+
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
@@ -449,8 +436,9 @@ bool downloadUpdate(String url)
   // start connection and send HTTP header
   int httpCode = https.GET();
 
-  if (httpCode == 0 || httpCode != HTTP_CODE_OK) {
-    DEBUG.printf("Failed HTTPCode: %i",httpCode);
+  if (httpCode == 0 || httpCode != HTTP_CODE_OK)
+  {
+    DEBUG.printf("Failed HTTPCode: %i", httpCode);
     return false;
   }
 
@@ -469,11 +457,10 @@ bool downloadUpdate(String url)
     return false;
   }
 
-  DEBUG.print("Beginning OTA update...");
   size_t written = Update.writeStream(https.getStream());
   (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
 
-  if (!Update.end())
+  if (Update.hasError())
   {
     DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
     return false;
@@ -484,11 +471,11 @@ bool downloadUpdate(String url)
   if (Update.isFinished())
   {
     DEBUG.println("Update successfully completed. Rebooting.");
+    delay(350);
     ESP.restart();
     return true;
   }
 
-    DEBUG.println("Update not finished. Something went wrong!");
-    return false;
-  
+  DEBUG.println("Update not finished. Something went wrong!");
+  return false;
 }
