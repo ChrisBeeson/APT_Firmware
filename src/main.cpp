@@ -25,19 +25,6 @@
 // ANDRIS Pool Thermometer (APT01) wifi battery powered floating water temperature sensor.
 //
 
-//TODO:
-// [X] OTA updates Xf
-// [ ] OTA console monitoring
-// [X] batt_level
-// [X] device posts
-// [X] wifi_level
-// [X] provisioning
-// [x] Manufacturing onboarding
-// [x] file storage
-// [x] deep sleep
-// [X] optimise battery - Compress and limit wifi broadcast, limited leds, sensors off after initial reading etc.
-//
-
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net" //TODO: move to config file
 #define ONBOARD_API_ENDPOINT "/onboardDevice"
@@ -132,10 +119,9 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.print("\nAPT Firmware Version: ");
-  DEBUG.println(VERSION);
+  DEBUG.printf("\nAPT Firmware Version: %s",VERSION);
 
-  SPIFFS.begin() ? DEBUG.println("File System Started") : DEBUG.println("File System Begin Error");
+  SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
 
   if (device_id == nullptr || device_id == "null")
@@ -147,7 +133,7 @@ void setup()
   if (user_id == nullptr || user_id == "null")
     provision();
 
-  DEBUG.print("Connecting to wifi.");
+  DEBUG.print("Connecting to Wifi.");
 
   WiFiManager wifiManager;
   while (WiFi.status() != WL_CONNECTED)
@@ -156,7 +142,7 @@ void setup()
     DEBUG.print(".");
   };
 
-  DEBUG.println("Connected.");
+  DEBUG.println(" Connected.");
   dallas_sensors.begin(); // Start sampling Temperature
 }
 
@@ -227,8 +213,8 @@ void loadConfig()
   DeserializationError error = deserializeJson(doc, configFile);
   if (error)
   {
-    DEBUG.println(F("Error: deserializeJson"));
-    DEBUG.println(error.c_str());
+    DEBUG.println(F("Error: deserializeJson: "));
+    DEBUG.print(error.c_str());
   }
   DEBUG.print(F("serializeJson = "));
   serializeJson(doc, Serial);
