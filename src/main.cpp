@@ -1,5 +1,6 @@
 //
-// ANDRIS Pool Thermometer (APT01) wifi battery powered floating water temperature sensor.
+// ANDRIS Pool Thermometer APT Firmware 
+// Wifi floating water sensor array.
 //
 
 #include "Esp.h"
@@ -11,6 +12,7 @@
 #include <ESP8266WiFiType.h>
 #include <ESP8266WiFiGeneric.h>
 #include <ESP8266HTTPClient.h>
+#include <ArduinoOTA.h>
 #include <ArduinoJson.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
@@ -27,8 +29,9 @@
 #define ONBOARD_PASSWORD "archiefifi"
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
-#define PUBLISH_DEVICE_CYCLES 1    // number of restarts before publishing device status
+#define PUBLISH_DEVICE_CYCLES 0    // number of restarts before publishing device status
 #define DEBUG Serial
+#define DEBUG_UPDATER Serial
 
 OneWire oneWire(TEMP_SENSOR_PIN);
 DallasTemperature dallas_sensors(&oneWire);
@@ -104,6 +107,8 @@ void setup()
   delay(350);
   setChipString();
   DEBUG.printf("\nAPT Firmware Version: %s\n", VERSION);
+
+   DEBUG.print("NOT OTA");
 
   SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
@@ -301,14 +306,20 @@ void publishDeviceStatus()
 
 String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
-  DEBUG.print("JSON POST... ");
-  if (WiFi.status() == WL_CONNECTED)
-  {
+  DEBUG.print("Posting... ");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG.println("ERROR: Wifi is not connected");
+    errorsSinceLastDevicePost++;
+    return "";
+  }
+
     HTTPClient https;
     BearSSL::WiFiClientSecure secureClient;
     secureClient.setInsecure();
     https.begin(secureClient, API_SERVER_URL, 443, endPoint, true);
     https.addHeader("Content-Type", "application/json");
+
     int httpResponseCode = https.POST(JSONString);
     String response = https.getString();
 
@@ -328,14 +339,6 @@ String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
       return "";
     }
 
-    return "";
-  }
-  else
-  {
-    DEBUG.println("ERROR: Wifi is not connected");
-    errorsSinceLastDevicePost++;
-    return "";
-  }
 }
 
 bool connectToWifi(String ssid, String password)
