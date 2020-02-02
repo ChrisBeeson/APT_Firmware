@@ -108,8 +108,6 @@ void setup()
   setChipString();
   DEBUG.printf("\nAPT Firmware Version: %s\n", VERSION);
 
-   DEBUG.print("NOT OTA");
-
   SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
 
@@ -460,16 +458,13 @@ bool downloadUpdate(String url)
     return false;
   }
 
-  size_t written = Update.writeStream(https.getStream());
+  size_t written = Update.writeStream( https.getStream() );
   (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
 
-  if (Update.hasError())
-  {
+  if (!Update.end()) {
     DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
     return false;
   }
-
-  DEBUG.println("Download complete!");
 
   if (Update.isFinished())
   {
@@ -480,5 +475,6 @@ bool downloadUpdate(String url)
   }
 
   DEBUG.println("Update not finished. Something went wrong!");
+  DEBUG.println(Update.printError(&DEBUG));
   return false;
 }
