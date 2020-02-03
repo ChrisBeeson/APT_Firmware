@@ -475,6 +475,6 @@ bool downloadUpdate(String url)
   }
 
   DEBUG.println("Update not finished. Something went wrong!");
-  DEBUG.println(Update.printError(&DEBUG));
+    DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
   return false;
 }
