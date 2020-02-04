@@ -23,13 +23,14 @@
 #define USER_FOR_DEVICE_API_ENDPOINT "/userForDevice"
 #define SENSOR_DATA_API_ENDPOINT "/sensorData"
 #define DEVICE_STATUS_API_ENDPOINT "/deviceStatus"
-#define DEBUG_API_ENDPOINT "/debug"
+#define DEBUG_API_ENDPOINT "/consoleLog"
 #define CONFIG_FILENAME "/config.json"
 #define ONBOARD_SSID "Galactica"
 #define ONBOARD_PASSWORD "archiefifi"
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
 #define PUBLISH_DEVICE_CYCLES 0    // number of restarts before publishing device status
+
 #define DEBUG Serial
 #define DEBUG_UPDATER Serial
 
@@ -62,43 +63,7 @@ void device_Maintance();
 void publishDeviceStatus();
 String getDownloadUrl();
 bool downloadUpdate(String url);
-
-/*   STATES
-Not_onboarded: config.json does not exist and doesn't contains serial_id
-onboard: config.json exists but does not contain user_id && wifi credentials are not setup
-provisioned: config.json excists, contains serial_id and user_id and wifi creds are setup
-has_errors: normally wifi connection issues.
-
-enum states
-{
-  not_onboarded,
-  onboarded,
-  provisioned,
-  has_errors
-}
-*/
-
-void FSDirectory()
-{
-  String str = "Directory: ";
-  Dir dir = SPIFFS.openDir("/");
-  while (dir.next())
-  {
-    str += dir.fileName();
-    str += " / ";
-    str += dir.fileSize();
-    str += "\r\n";
-  }
-  DEBUG.print(str);
-}
-
-void FSInfoPeek()
-{
-  FSInfo fs_info;
-  SPIFFS.info(fs_info);
-  DEBUG.print("SPIFSS totalBytes :");
-  DEBUG.print(fs_info.totalBytes);
-}
+void debug(String string, bool publish = false);
 
 
 void setup()
@@ -107,7 +72,6 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\nAPT Firmware Version: %s\n", VERSION);
 
   SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
@@ -122,15 +86,15 @@ void setup()
     provision();
 
   DEBUG.print("Connecting to Wifi.");
-
   WiFiManager wifiManager;
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(300);
     DEBUG.print(".");
   };
-
   DEBUG.println(" Connected.");
+
+  debug(VERSION, true);
   dallas_sensors.begin(); // Start sampling Temperature
 }
 
@@ -177,7 +141,7 @@ void onboard()
     StaticJsonDocument<100> fsDoc;
     fsDoc["device_id"] = response;
     File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
-    DEBUG.print(F("Serializing to file. Size = "));
+    DEBUG.print("Serializing to file. Size = ");
     uint16 size = serializeJson(fsDoc, configFile);
     DEBUG.println(size);
     configFile.close();
@@ -192,9 +156,7 @@ void onboard()
 
 void loadConfig()
 {
-  DEBUG.print("Load Config.json....");
   File configFile = SPIFFS.open(CONFIG_FILENAME, "r");
-
   size_t size = configFile.size();
   std::unique_ptr<char[]> buf(new char[size]);
 
@@ -202,16 +164,12 @@ void loadConfig()
   DeserializationError error = deserializeJson(doc, configFile);
   if (error)
   {
-    DEBUG.println(F("Error: deserializeJson: "));
-    DEBUG.print(error.c_str());
+    debug(error.c_str(), true);
   }
-  DEBUG.print(F("serializeJson = "));
-  serializeJson(doc, Serial);
-  DEBUG.println("\n");
   configFile.close();
-
   device_id = doc["device_id"].as<String>();
   user_id = doc["user_id"].as<String>();
+  debug("Config.json Loaded", true);
 }
 
 void provision()
@@ -225,6 +183,7 @@ void provision()
   String JSONmessage;
   StaticJsonDocument<100> doc;
   doc["device_id"] = device_id;
+  doc["product"] = PRODUCT;
   serializeJson(doc, JSONmessage);
   DEBUG.println(JSONmessage);
 
@@ -235,7 +194,7 @@ void provision()
     fsDoc["device_id"] = device_id;
     fsDoc["user_id"] = response;
     File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
-    DEBUG.print(F("Serializing to file. Size = "));
+    DEBUG.print("Serializing to file. Size = ");
     uint16 size = serializeJson(fsDoc, configFile);
     DEBUG.println(size);
     configFile.close();
@@ -300,13 +259,26 @@ void publishDeviceStatus()
   serializeJson(doc, JSONmessage);
   DEBUG.println(JSONmessage);
   if (HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT) != "")
-    DEBUG.println("Success");
+    debug("Success\n");
 }
+
+void debug(String string, bool publish){
+  DEBUG.println(string);
+
+  if (publish) {
+  StaticJsonDocument<300> doc;
+  String JSONmessage;
+  doc["device_id"] = device_id;
+  doc["product"] = PRODUCT;
+  doc["debugString"] = string;
+  serializeJson(doc, JSONmessage);
+  HttpJSONStringToEndPoint(JSONmessage, DEBUG_API_ENDPOINT);
+  }
+}
+
 
 String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
-  DEBUG.print("Posting... ");
-
   if (WiFi.status() != WL_CONNECTED) {
     DEBUG.println("ERROR: Wifi is not connected");
     errorsSinceLastDevicePost++;
@@ -340,7 +312,7 @@ String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 
 }
 
-bool connectToWifi(String ssid, String password)
+void connectToWifi(String ssid, String password)
 {
   WiFi.begin(ssid, password);
   int i = 0;
@@ -427,13 +399,10 @@ bool downloadUpdate(String url)
     return false;
   }
 
-  const char *baseURL = doc["baseURL"];
-  const char *path = doc["path"];
-
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
-  https.begin(secureClient, baseURL, 443, path, true);
+  https.begin(secureClient, doc["baseURL"], 443, doc["path"], true);
 
   // start connection and send HTTP header
   int httpCode = https.GET();
@@ -452,8 +421,9 @@ bool downloadUpdate(String url)
     return false;
   }
 
-  bool canBegin = Update.begin(contentLength, U_FLASH);
-  if (!canBegin)
+  //Update.setMD5(doc["md5Hash"]);
+
+  if (!Update.begin(contentLength, U_FLASH))
   {
     DEBUG.println("Not enough space to begin OTA");
     return false;
@@ -462,11 +432,17 @@ bool downloadUpdate(String url)
   size_t written = Update.writeStream( https.getStream() );
   (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
 
+
   if (!Update.end()) {
     DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
     return false;
   }
-
+/*
+  if (!Update.setMD5(doc["md5Hash"])) {
+      DEBUG.println("Failed MD5 checksum");
+      DEBUG.println(Update.)
+  }
+*/
   if (Update.isFinished())
   {
     DEBUG.println("Update successfully completed. Rebooting.");
@@ -479,3 +455,43 @@ bool downloadUpdate(String url)
     DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
   return false;
 }
+
+
+/*   STATES
+Not_onboarded: config.json does not exist and doesn't contains serial_id
+onboard: config.json exists but does not contain user_id && wifi credentials are not setup
+provisioned: config.json excists, contains serial_id and user_id and wifi creds are setup
+has_errors: normally wifi connection issues.
+
+enum states
+{
+  not_onboarded,
+  onboarded,
+  provisioned,
+  has_errors
+}
+*/
+
+/*
+void FSDirectory()
+{
+  String str = "Directory: ";
+  Dir dir = SPIFFS.openDir("/");
+  while (dir.next())
+  {
+    str += dir.fileName();
+    str += " / ";
+    str += dir.fileSize();
+    str += "\r\n";
+  }
+  DEBUG.print(str);
+}
+
+void FSInfoPeek()
+{
+  FSInfo fs_info;
+  SPIFFS.info(fs_info);
+  DEBUG.print("SPIFSS totalBytes :");
+  DEBUG.print(fs_info.totalBytes);
+}
+*/
