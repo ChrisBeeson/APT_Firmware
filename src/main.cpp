@@ -306,7 +306,6 @@ void publishDeviceStatus()
 
 void debug(String string, bool publish)
 {
-
   //TODO: if no Wifi, store in array in FS.
   DEBUG.println(string);
 
