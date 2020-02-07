@@ -34,8 +34,8 @@
 #define PUBLISH_DEVICE_CYCLES 3 // number of restarts before publishing device status
 
 #define DEBUG Serial
-#define DEBUG_MODE
-//#define DEBUG_UPDATER Serial
+//#define DEBUG_MODE
+#define DEBUG_UPDATER Serial
 //#define TOTAL_RESET
 
 OneWire oneWire(TEMP_SENSOR_PIN);
@@ -48,7 +48,8 @@ int rebootsSinceLastDevicePost = 0;
 String device_id;
 String user_id;
 
-struct APIResponse {
+struct APIResponse
+{
   int code;
   String payload;
 };
@@ -67,7 +68,7 @@ void provision();
 int wifiStrengthInBars();
 void tick();
 void connectToWifi(String ssid, String password);
-APIResponse  HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
+APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
 void publishTemperature();
 void device_Maintance();
 void publishDeviceStatus();
@@ -77,71 +78,75 @@ void debug(String string, bool publish = false);
 void apConfigSaveCallback();
 void ota_update();
 
-
 void setup()
 {
   pinMode(STATUS_LED, OUTPUT);
   Serial.begin(115200);
   delay(350);
   setChipString();
-  #ifdef DEBUG_MODE
+  DEBUG.printf("[Setup] %s %s\n",PRODUCT, VERSION);
+
+#ifdef DEBUG_MODE
   ticker.attach(0.2, tick);
   digitalWrite(STATUS_LED, HIGH);
-  #endif
+#endif
 
-  SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
+  SPIFFS.begin() ? DEBUG.println("[Setup] FS - Started") : DEBUG.println("[Setup] FS - ERROR");
 
 #ifdef TOTAL_RESET
-{
-  SPIFFS.format();
-  WiFiManager wifiManager;
-  wifiManager.resetSettings();
- // Wifi.disconnect();
-}
+  {
+    SPIFFS.format();
+    WiFiManager wifiManager;
+    wifiManager.resetSettings();
+    // Wifi.disconnect();
+  }
 #endif
 
   SPIFFS.exists(CONFIG_FILENAME) ? loadConfig() : onboard();
 
-  if (device_id == nullptr || device_id == "null")
+  if (device_id == nullptr || device_id == "null" || device_id.length() == 0)
   {
-    DEBUG.println("FATAL ERROR: Device does not have a device_id");
+    DEBUG.println("[SETUP] FATAL: No device_id");
     ESP.deepSleep(0);
   }
 
   if (user_id == nullptr || user_id == "null")
     provision();
 
-  DEBUG.print("Connecting to Wifi.");
+  DEBUG.print("[Setup] Connecting to Wifi.");
   WiFiManager wifiManager;
+
+  int i = 0;
   while (WiFi.status() != WL_CONNECTED)
   {
-    delay(300);
+    delay(1000);
     DEBUG.print(".");
+    if (i>20) {
+      provision();
+    }
+    i++;
   };
   DEBUG.println(" Connected.");
 
-  debug(VERSION, true);
-
   dallas_sensors.begin();
-  
-  #ifdef DEBUG_MODE
+
+#ifdef DEBUG_MODE
   ota_update();
   ticker.detach();
   digitalWrite(STATUS_LED, LOW);
-  #endif
-
+#endif
 }
 
 void onboard()
 {
-  DEBUG.print("*** Onboarding *** \nFormatting SPIFFS...");
+  DEBUG.print("*** *** \n[Onboarding] Formatting SPIFFS... ");
   SPIFFS.format() ? DEBUG.println("Success") : DEBUG.println("Failed");
 
   connectToWifi(ONBOARD_SSID, ONBOARD_PASSWORD);
 
-  debug("Confirming Sensor count...");
+  DEBUG.print("[Onboaring] Sensor test: ");
   dallas_sensors.begin();
-  (dallas_sensors.getDeviceCount() == 1) ? debug("Success!") : debug("FAILED");
+  (dallas_sensors.getDeviceCount() == 1) ? debug("Passed") : debug("FAILED");
   char temp_buf[64];
   sprintf(temp_buf, "%2.1f", dallas_sensors.getTempCByIndex(0));
   int vcc = analogRead(BATT_ADC_PIN);
@@ -181,14 +186,16 @@ void onboard()
 void loadConfig()
 {
   File configFile = SPIFFS.open(CONFIG_FILENAME, "r");
-  DEBUG.println(configFile);
   size_t size = configFile.size();
   std::unique_ptr<char[]> buf(new char[size]);
 
   StaticJsonDocument<100> doc;
   DeserializationError error = deserializeJson(doc, configFile);
-  if (error) debug(error.c_str(), true);
-  
+  if (error)
+  {
+    debug("[Load Config] Error deserializing JSON");
+    debug(error.c_str(), true);
+  }
   configFile.close();
   device_id = doc["device_id"].as<String>();
   user_id = doc["user_id"].as<String>();
@@ -196,29 +203,31 @@ void loadConfig()
 
 void provision()
 {
-  DEBUG.println("\nProvision - starting wifiManager");
+  DEBUG.println("\n[Provision] Starting wifiManager");
   delay(300);
   ticker.attach(0.6, tick);
 
   WiFiManager wifiManager;
 
-  if (user_id == "null") {
+  if (user_id == "null")
+  {
     user_id.clear();
-    DEBUG.println("user_id is Null, Cleared user_id and resetting AP");
+    DEBUG.println("[Provision] user_id is 'Null'");
     wifiManager.resetSettings();
     delay(1000);
   }
 
-  wifiManager.setConfigPortalTimeout(10*60*60);
+  wifiManager.setConfigPortalTimeout(10 * 60 * 60);
   wifiManager.setSaveConfigCallback(apConfigSaveCallback);
   wifiManager.autoConnect(AP_NAME);
-  
-  debug("Provision Timed Out");
+
+  debug("[Provision] Timed Out");
   ESP.deepSleep(0);
 }
 
-//called when wifimanger config is saved 
-void apConfigSaveCallback() {
+//called when wifimanger config is saved
+void apConfigSaveCallback()
+{
   // look for user
   String JSONmessage;
   StaticJsonDocument<100> doc;
@@ -239,11 +248,13 @@ void apConfigSaveCallback() {
     delay(1000);
     user_id = response.payload;
     publishDeviceStatus();
+    debug("[PROVISION] Success");
 
     ticker.detach();
     digitalWrite(STATUS_LED, LOW);
-
-  } else {
+  }
+  else
+  {
     debug("[PROVISION] Failed to find user", true);
     debug(response.payload, true);
   }
@@ -256,7 +267,6 @@ void configModeCallback(WiFiManager *myWiFiManager)
   ticker.attach(0.2, tick);
 }
 
-
 void loop()
 {
   if (user_id != "null")
@@ -266,7 +276,7 @@ void loop()
   }
   else
   {
-    debug("[LOOP] User_id is null so not publishing.", true);
+    debug("[LOOP] User_id is null");
   }
 
   //Wifi.end();
@@ -288,7 +298,7 @@ void publishTemperature()
   data[WATER_TEMP_SENSOR] = dallas_sensors.getTempCByIndex(0);
   serializeJson(doc, JSONmessage);
   debug(JSONmessage, true);
-  
+
   HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT);
 }
 
@@ -308,12 +318,11 @@ void publishDeviceStatus()
   HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT);
 }
 
-
 APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
-  #ifdef DEBUG_MODE
+#ifdef DEBUG_MODE
   digitalWrite(STATUS_LED, HIGH);
-  #endif
+#endif
 
   APIResponse response;
 
@@ -333,10 +342,10 @@ APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
   response.payload = https.getString();
   https.end();
   secureClient.stop();
-    
-  #ifdef DEBUG_MODE
+
+#ifdef DEBUG_MODE
   digitalWrite(STATUS_LED, LOW);
-  #endif
+#endif
 
   if (response.code >= 200 && response.code < 205)
   {
@@ -347,7 +356,7 @@ APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
     debug("[POST] Invalid response from API", true);
     debug(String(response.code), true);
     debug(response.payload, true);
-    response.code =-1;  
+    response.code = -1;
     return response;
   }
 }
@@ -375,12 +384,12 @@ void device_Maintance()
   rebootsSinceLastDevicePost++;
 }
 
-void ota_update() {
-    String downloadUrl = getDownloadUrl();
-    if (downloadUrl.length() > 0)
-      downloadUpdate(downloadUrl);
+void ota_update()
+{
+  String downloadUrl = getDownloadUrl();
+  if (downloadUrl.length() > 0)
+    downloadUpdate(downloadUrl);
 }
-
 
 String getDownloadUrl()
 {
@@ -401,6 +410,7 @@ String getDownloadUrl()
   case 200:
     returnString = https.getString();
     debug("[OTA] Update available!", true);
+    debug(returnString);
     break;
 
   case 204:
@@ -410,7 +420,7 @@ String getDownloadUrl()
 
   default:
     debug("[OTA] Failed.", true);
-   // debug(httpCode);
+    // debug(httpCode);
     debug(https.getString());
     returnString = "";
   }
@@ -445,8 +455,6 @@ bool downloadUpdate(String url)
     return false;
   }
 
-  Update.setMD5(doc["md5Hash"]);
-
   if (!Update.begin(contentLength, U_FLASH))
   {
     debug("Not enough space to begin OTA", true);
@@ -456,22 +464,27 @@ bool downloadUpdate(String url)
   size_t written = Update.writeStream(https.getStream());
   (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
 
-  if (!Update.setMD5(doc["md5Hash"])) {
-      debug("Failed MD5 checksum");
-      return false;
-  }
+  Update.setMD5(doc["md5Hash"]);
 
   if (!Update.end())
   {
     debug(String(Update.getError()), true);
     return false;
   }
-  
+
+  ticker.detach();
+
   if (Update.isFinished())
   {
     debug("Update successfully completed. Rebooting.", true);
-    delay(1000);
+    delay(2000);
+    WiFi.forceSleepBegin();
+    wdt_reset();
     ESP.restart();
+    while (1)
+      wdt_reset();
+    //ESP.reset();
+    //delay(2000);
     return true;
   }
 
