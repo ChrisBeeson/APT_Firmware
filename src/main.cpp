@@ -381,9 +381,7 @@ void ota_update() {
       downloadUpdate(downloadUrl);
 }
 
-/* 
- * Check if needs to update the device and returns the download url.
- */
+
 String getDownloadUrl()
 {
   HTTPClient https;
