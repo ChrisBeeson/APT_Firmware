@@ -369,7 +369,7 @@ void device_Maintance()
   {
     rebootsSinceLastDevicePost = 0;
     publishDeviceStatus();
-    ota_update()
+    ota_update();
   }
 
   rebootsSinceLastDevicePost++;
