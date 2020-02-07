@@ -2,7 +2,6 @@
 // ANDRIS Pool Thermometer APT Firmware
 // Wifi floating water sensor array.
 //
-
 #include "Esp.h"
 #include <FS.h>
 #include <string.h>
@@ -32,9 +31,10 @@
 
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
-#define PUBLISH_DEVICE_CYCLES 0 // number of restarts before publishing device status
+#define PUBLISH_DEVICE_CYCLES 3 // number of restarts before publishing device status
 
 #define DEBUG Serial
+#define DEBUG_MODE
 //#define DEBUG_UPDATER Serial
 //#define TOTAL_RESET
 
@@ -48,7 +48,7 @@ int rebootsSinceLastDevicePost = 0;
 String device_id;
 String user_id;
 
-struct httpResponse {
+struct APIResponse {
   int code;
   String payload;
 };
@@ -67,7 +67,7 @@ void provision();
 int wifiStrengthInBars();
 void tick();
 void connectToWifi(String ssid, String password);
-String HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
+APIResponse  HttpJSONStringToEndPoint(String JSONString, const char *endPoint);
 void publishTemperature();
 void device_Maintance();
 void publishDeviceStatus();
@@ -75,7 +75,7 @@ String getDownloadUrl();
 bool downloadUpdate(String url);
 void debug(String string, bool publish = false);
 void apConfigSaveCallback();
-
+void ota_update();
 
 
 void setup()
@@ -84,7 +84,10 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  //digitalWrite(STATUS_LED, HIGH);
+  #ifdef DEBUG_MODE
+  ticker.attach(0.2, tick);
+  digitalWrite(STATUS_LED, HIGH);
+  #endif
 
   SPIFFS.begin() ? DEBUG.println("File System: Started") : DEBUG.println("File System: ERROR");
 
@@ -109,7 +112,6 @@ void setup()
     provision();
 
   DEBUG.print("Connecting to Wifi.");
-
   WiFiManager wifiManager;
   while (WiFi.status() != WL_CONNECTED)
   {
@@ -119,8 +121,15 @@ void setup()
   DEBUG.println(" Connected.");
 
   debug(VERSION, true);
-  dallas_sensors.begin(); // Start sampling Temperature
-  ticker.attach(0.6, tick);
+
+  dallas_sensors.begin();
+  
+  #ifdef DEBUG_MODE
+  ota_update();
+  ticker.detach();
+  digitalWrite(STATUS_LED, LOW);
+  #endif
+
 }
 
 void onboard()
@@ -130,7 +139,7 @@ void onboard()
 
   connectToWifi(ONBOARD_SSID, ONBOARD_PASSWORD);
 
-  DEBUG.print("Confirming Sensor count...");
+  debug("Confirming Sensor count...");
   dallas_sensors.begin();
   (dallas_sensors.getDeviceCount() == 1) ? debug("Success!") : debug("FAILED");
   char temp_buf[64];
@@ -147,17 +156,17 @@ void onboard()
   doc["wifi_strength"] = WiFi.RSSI();
   doc["mac_address"] = WiFi.macAddress();
   serializeJson(doc, JSONmessage);
-  String response = HttpJSONStringToEndPoint(JSONmessage, ONBOARD_API_ENDPOINT);
-  if (response == "")
+  APIResponse response = HttpJSONStringToEndPoint(JSONmessage, ONBOARD_API_ENDPOINT);
+  if (response.code == -1)
   {
-    DEBUG.println("FATAL ERROR: Onboarding did not recieve a valid device_id");
+    debug("[Onboarding] FAILED - did not recieve a valid device_id.");
     ESP.deepSleep(0);
   }
   else
   {
     // Create config and Write to SPIFFS
     StaticJsonDocument<100> fsDoc;
-    fsDoc["device_id"] = response;
+    fsDoc["device_id"] = response.payload;
     File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
     serializeJson(fsDoc, configFile);
     configFile.close();
@@ -165,7 +174,7 @@ void onboard()
   }
 
   SPIFFS.end();
-  debug("Onboarding SUCCESS");
+  debug("[Onboarding] SUCCESS!");
   ESP.deepSleep(0);
 }
 
@@ -210,35 +219,33 @@ void provision()
 
 //called when wifimanger config is saved 
 void apConfigSaveCallback() {
-
-  DEBUG.println("AP config recieved.  Searching for User looking for device on same Public IP");
-
+  // look for user
   String JSONmessage;
   StaticJsonDocument<100> doc;
   doc["device_id"] = device_id;
   doc["product"] = PRODUCT;
   serializeJson(doc, JSONmessage);
-  DEBUG.println(JSONmessage);
+  APIResponse response = HttpJSONStringToEndPoint(JSONmessage, USER_FOR_DEVICE_API_ENDPOINT);
 
-  String response = HttpJSONStringToEndPoint(JSONmessage, USER_FOR_DEVICE_API_ENDPOINT);
-  DEBUG.println(response);
-
-  if (response != "" )
+  if (response.code != -1)
   {
+    // payload will contain userID, store it in FS
     StaticJsonDocument<100> fsDoc;
     fsDoc["device_id"] = device_id;
-    fsDoc["user_id"] = response;
+    fsDoc["user_id"] = response.payload;
     File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
     serializeJson(fsDoc, configFile);
     configFile.close();
     delay(1000);
-    user_id = response;
+    user_id = response.payload;
     publishDeviceStatus();
 
     ticker.detach();
     digitalWrite(STATUS_LED, LOW);
+
   } else {
-    debug("[PROVISION] Could Not Find User", true);
+    debug("[PROVISION] Failed to find user", true);
+    debug(response.payload, true);
   }
 }
 
@@ -249,6 +256,7 @@ void configModeCallback(WiFiManager *myWiFiManager)
   ticker.attach(0.2, tick);
 }
 
+
 void loop()
 {
   if (user_id != "null")
@@ -258,7 +266,7 @@ void loop()
   }
   else
   {
-    debug("[LOOP] User_id is null - not publishing anything !", true);
+    debug("[LOOP] User_id is null so not publishing.", true);
   }
 
   //Wifi.end();
@@ -279,17 +287,13 @@ void publishTemperature()
   JsonObject data = doc.createNestedObject("sensors");
   data[WATER_TEMP_SENSOR] = dallas_sensors.getTempCByIndex(0);
   serializeJson(doc, JSONmessage);
-  DEBUG.println(JSONmessage);
-
-  if (HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT) != "")
-  {
-    DEBUG.println(" Success");
-  }
+  debug(JSONmessage, true);
+  
+  HttpJSONStringToEndPoint(JSONmessage, SENSOR_DATA_API_ENDPOINT);
 }
 
 void publishDeviceStatus()
 {
-  DEBUG.println("Publish Device Status: ");
   StaticJsonDocument<400> doc;
   String JSONmessage;
   doc["user_id"] = user_id;
@@ -299,34 +303,25 @@ void publishDeviceStatus()
   doc["wifi_strength"] = WiFi.RSSI();
   doc["firmware_version"] = VERSION;
   serializeJson(doc, JSONmessage);
-  DEBUG.println(JSONmessage);
-  if (HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT) != "")
-    debug("Success\n");
+  debug(JSONmessage, true);
+
+  HttpJSONStringToEndPoint(JSONmessage, DEVICE_STATUS_API_ENDPOINT);
 }
 
-void debug(String string, bool publish)
-{
-  //TODO: if no Wifi, store in array in FS.
-  DEBUG.println(string);
 
-  if (publish)
-  {
-    StaticJsonDocument<300> doc;
-    String JSONmessage;
-    doc["device_id"] = device_id;
-    doc["product"] = PRODUCT;
-    doc["debugString"] = string;
-    serializeJson(doc, JSONmessage);
-    HttpJSONStringToEndPoint(JSONmessage, DEBUG_API_ENDPOINT);
-  }
-}
-
-String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
+APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
+  #ifdef DEBUG_MODE
+  digitalWrite(STATUS_LED, HIGH);
+  #endif
+
+  APIResponse response;
+
   if (WiFi.status() != WL_CONNECTED)
   {
-    DEBUG.println("ERROR: Wifi is not connected");
-    return "";
+    debug("ERROR: Wifi is not connected");
+    response.code = -1;
+    return response;
   }
 
   HTTPClient https;
@@ -334,38 +329,38 @@ String HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
   secureClient.setInsecure();
   https.begin(secureClient, API_SERVER_URL, 443, endPoint, true);
   https.addHeader("Content-Type", "application/json");
-
-  int httpResponseCode = https.POST(JSONString);
-  String response = https.getString();
-
+  response.code = https.POST(JSONString);
+  response.payload = https.getString();
   https.end();
   secureClient.stop();
+    
+  #ifdef DEBUG_MODE
+  digitalWrite(STATUS_LED, LOW);
+  #endif
 
-  if (httpResponseCode >= 200 && httpResponseCode < 205)
+  if (response.code >= 200 && response.code < 205)
   {
     return response;
   }
   else
   {
-    DEBUG.print("Error! ");
-    DEBUG.println(httpResponseCode);
-    DEBUG.println(response);
-    return "";
+    debug("[POST] Invalid response from API", true);
+    debug(String(response.code), true);
+    debug(response.payload, true);
+    response.code =-1;  
+    return response;
   }
 }
 
 void connectToWifi(String ssid, String password)
 {
-  DEBUG.print("Connecting to Wifi.");
+  debug("Connecting to Wifi.");
   WiFi.begin(ssid, password);
-
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(300);
-    DEBUG.print(".");
   };
-
-  DEBUG.println(" Connected.");
+  debug("Connected.");
 }
 
 void device_Maintance()
@@ -374,13 +369,16 @@ void device_Maintance()
   {
     rebootsSinceLastDevicePost = 0;
     publishDeviceStatus();
-
-    String downloadUrl = getDownloadUrl();
-    if (downloadUrl.length() > 0)
-      downloadUpdate(downloadUrl);
+    ota_update()
   }
 
   rebootsSinceLastDevicePost++;
+}
+
+void ota_update() {
+    String downloadUrl = getDownloadUrl();
+    if (downloadUrl.length() > 0)
+      downloadUpdate(downloadUrl);
 }
 
 /* 
@@ -404,35 +402,29 @@ String getDownloadUrl()
   {
   case 200:
     returnString = https.getString();
-    debug("New firmware available!", true);
+    debug("[OTA] Update available!", true);
     break;
 
   case 204:
-    debug("Device is up to date.", true);
+    debug("[OTA] Up to date.", true);
     returnString = "";
     break;
 
   default:
-
-    debug("Unable to download firmware URL, error: %s\n", https.errorToString(httpCode).c_str());
+    debug("[OTA] Failed.", true);
+   // debug(httpCode);
+    debug(https.getString());
     returnString = "";
   }
+
   https.end();
   return returnString;
 }
 
 bool downloadUpdate(String url)
 {
-  DEBUG.println(url);
-  DEBUG.print("Downloading Update... ");
   StaticJsonDocument<200> doc;
-  DeserializationError error = deserializeJson(doc, url);
-
-  if (error)
-  {
-    DEBUG.print(error.c_str());
-    return false;
-  }
+  deserializeJson(doc, url);
 
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
@@ -441,10 +433,9 @@ bool downloadUpdate(String url)
 
   // start connection and send HTTP header
   int httpCode = https.GET();
-
   if (httpCode == 0 || httpCode != HTTP_CODE_OK)
   {
-    DEBUG.printf("Failed HTTPCode: %i", httpCode);
+    debug("[OTA] Failed - bad HTTP code", true);
     return false;
   }
 
@@ -452,42 +443,42 @@ bool downloadUpdate(String url)
 
   if (contentLength == 0)
   {
-    DEBUG.println("There was no content in the response");
+    debug("There was no content in the response", true);
     return false;
   }
 
-  //Update.setMD5(doc["md5Hash"]);
+  Update.setMD5(doc["md5Hash"]);
 
   if (!Update.begin(contentLength, U_FLASH))
   {
-    DEBUG.println("Not enough space to begin OTA");
+    debug("Not enough space to begin OTA", true);
     return false;
   }
 
   size_t written = Update.writeStream(https.getStream());
   (written == contentLength) ? DEBUG.println("Written : " + String(written) + " successfully") : DEBUG.println("Written only : " + String(written) + "/" + String(contentLength));
 
+  if (!Update.setMD5(doc["md5Hash"])) {
+      debug("Failed MD5 checksum");
+      return false;
+  }
+
   if (!Update.end())
   {
-    DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
+    debug(String(Update.getError()), true);
     return false;
   }
-  /*
-  if (!Update.setMD5(doc["md5Hash"])) {
-      DEBUG.println("Failed MD5 checksum");
-      DEBUG.println(Update.)
-  }
-*/
+  
   if (Update.isFinished())
   {
-    DEBUG.println("Update successfully completed. Rebooting.");
-    delay(350);
+    debug("Update successfully completed. Rebooting.", true);
+    delay(1000);
     ESP.restart();
     return true;
   }
 
-  DEBUG.println("Update not finished. Something went wrong!");
-  DEBUG.println("Error Occurred. Error #: " + String(Update.getError()));
+  debug("Update not finished. Something went wrong!", true);
+  debug(String(Update.getError()), true);
   return false;
 }
 
@@ -496,6 +487,25 @@ void tick()
   //toggle state
   int state = digitalRead(STATUS_LED); // get the current state of GPIO1 pin
   digitalWrite(STATUS_LED, !state);    // set pin to the opposite state
+}
+
+void debug(String string, bool publish)
+{
+  //TODO: if no Wifi, store in array in FS.
+  DEBUG.println(string);
+  return;
+
+  if (publish)
+  {
+    StaticJsonDocument<300> doc;
+    String JSONmessage;
+    doc["device_id"] = device_id;
+    doc["product"] = PRODUCT;
+    doc["debugString"] = string;
+    serializeJson(doc, JSONmessage);
+    HttpJSONStringToEndPoint(JSONmessage, DEBUG_API_ENDPOINT);
+    delay(1000);
+  }
 }
 
 /*   STATES
