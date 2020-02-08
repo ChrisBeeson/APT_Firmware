@@ -34,7 +34,7 @@
 #define PUBLISH_DEVICE_CYCLES 3 // number of restarts before publishing device status
 
 #define DEBUG Serial
-//#define DEBUG_MODE
+#define DEBUG_MODE
 #define DEBUG_UPDATER Serial
 //#define TOTAL_RESET
 
@@ -84,7 +84,7 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\n[Setup] %s %s\n",PRODUCT, VERSION);
+  DEBUG.printf("\n[Setup] %s %s  ACTUALLY 0.1.23\n",PRODUCT, VERSION);
 
 #ifdef DEBUG_MODE
   ticker.attach(0.2, tick);
@@ -121,7 +121,7 @@ void setup()
   {
     delay(1000);
     DEBUG.print(".");
-    if (i>20) {
+    if (i>500) {
       provision();
     }
     i++;
@@ -480,7 +480,7 @@ bool downloadUpdate(String url)
     delay(2000);
     WiFi.forceSleepBegin();
     wdt_reset();
-    ESP.restart();
+    ESP.reset();
     while (1)
       wdt_reset();
     //ESP.reset();
