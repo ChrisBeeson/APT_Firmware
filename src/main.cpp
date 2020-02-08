@@ -84,7 +84,7 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("[Setup] %s %s\n",PRODUCT, VERSION);
+  DEBUG.printf("\n[Setup] %s %s\n",PRODUCT, VERSION);
 
 #ifdef DEBUG_MODE
   ticker.attach(0.2, tick);
