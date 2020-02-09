@@ -31,20 +31,20 @@
 
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
-#define PUBLISH_DEVICE_CYCLES 3 // number of restarts before publishing device status
 
-#define DEBUG Serial
-#define DEBUG_MODE
+#define PUBLISH_DEVICE_CYCLES 3 // number of restarts before publishing device status
+#define RTC_COUNTER_SIGNATURE 0xD0D01234
+#define RTC_COUNTER_ADDRESS 0
+
 #define DEBUG_UPDATER Serial
+#define DEBUG Serial
+//#define DEBUG_MODE
 //#define TOTAL_RESET
 
 OneWire oneWire(TEMP_SENSOR_PIN);
 DallasTemperature dallas_sensors(&oneWire);
 Ticker ticker;
-
-// System
 char device_chipId[13];
-int rebootsSinceLastDevicePost = 0;
 String device_id;
 String user_id;
 
@@ -52,6 +52,12 @@ struct APIResponse
 {
   int code;
   String payload;
+};
+
+struct rtcCounter
+{
+  uint32_t signature;
+  uint32_t bootCount;
 };
 
 void setChipString()
@@ -73,10 +79,13 @@ void publishTemperature();
 void device_Maintance();
 void publishDeviceStatus();
 String getDownloadUrl();
-bool downloadUpdate(String url);
+bool installUpdate(String url);
 void debug(String string, bool publish = false);
 void apConfigSaveCallback();
 void ota_update();
+void configModeCallback(WiFiManager *myWiFiManager);
+rtcCounter readRtcCounter();
+void writeRtcCounter(rtcCounter counter);
 
 void setup()
 {
@@ -84,7 +93,9 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\n[Setup] %s %s  ACTUALLY 0.1.23\n",PRODUCT, VERSION);
+  DEBUG.printf("\n\n%s %s 0.1.24\n", PRODUCT, VERSION);
+  //rst_info *rinfo = ESP.getResetInfoPtr();
+  //Serial.print(String("\nResetInfo.reason = ") + (*rinfo).reason + ": " + ESP.getResetReason() + "\n");
 
 #ifdef DEBUG_MODE
   ticker.attach(0.2, tick);
@@ -98,7 +109,6 @@ void setup()
     SPIFFS.format();
     WiFiManager wifiManager;
     wifiManager.resetSettings();
-    // Wifi.disconnect();
   }
 #endif
 
@@ -121,8 +131,9 @@ void setup()
   {
     delay(1000);
     DEBUG.print(".");
-    if (i>500) {
-      provision();
+    if (i > 500)
+    {
+      ESP.deepSleep(0);
     }
     i++;
   };
@@ -139,44 +150,44 @@ void setup()
 
 void onboard()
 {
-  DEBUG.print("*** *** \n[Onboarding] Formatting SPIFFS... ");
-  SPIFFS.format() ? DEBUG.println("Success") : DEBUG.println("Failed");
+  DEBUG.print("\n[Onboarding] Formatting SPIFFS... ");
+  SPIFFS.format() ? DEBUG.println("Success") : DEBUG.println("FAILED");
 
+  DEBUG.print("[Onboarding] ");
   connectToWifi(ONBOARD_SSID, ONBOARD_PASSWORD);
 
-  DEBUG.print("[Onboaring] Sensor test: ");
+  DEBUG.print("[Onboarding] Sensor test: ");
   dallas_sensors.begin();
   (dallas_sensors.getDeviceCount() == 1) ? debug("Passed") : debug("FAILED");
-  char temp_buf[64];
-  sprintf(temp_buf, "%2.1f", dallas_sensors.getTempCByIndex(0));
+  dallas_sensors.requestTemperatures();
+  double temp = dallas_sensors.getTempCByIndex(0);
+
   int vcc = analogRead(BATT_ADC_PIN);
 
   String JSONmessage;
   DynamicJsonDocument doc(400);
   doc["product"] = PRODUCT;
   doc["chip_id"] = device_chipId;
-  doc[WATER_TEMP_SENSOR] = temp_buf;
+  doc[WATER_TEMP_SENSOR] = temp;
   doc["batt_vcc"] = vcc;
   doc["firmwareVersion"] = VERSION;
   doc["wifi_strength"] = WiFi.RSSI();
   doc["mac_address"] = WiFi.macAddress();
   serializeJson(doc, JSONmessage);
+
   APIResponse response = HttpJSONStringToEndPoint(JSONmessage, ONBOARD_API_ENDPOINT);
   if (response.code == -1)
   {
-    debug("[Onboarding] FAILED - did not recieve a valid device_id.");
+    debug("[Onboarding] FAILED! Invalid device_id.");
     ESP.deepSleep(0);
   }
-  else
-  {
-    // Create config and Write to SPIFFS
-    StaticJsonDocument<100> fsDoc;
-    fsDoc["device_id"] = response.payload;
-    File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
-    serializeJson(fsDoc, configFile);
-    configFile.close();
-    delay(1000);
-  }
+
+  StaticJsonDocument<100> fsDoc;
+  fsDoc["device_id"] = response.payload;
+  File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
+  serializeJson(fsDoc, configFile);
+  configFile.close();
+  delay(1000);
 
   SPIFFS.end();
   debug("[Onboarding] SUCCESS!");
@@ -197,13 +208,14 @@ void loadConfig()
     debug(error.c_str(), true);
   }
   configFile.close();
+
   device_id = doc["device_id"].as<String>();
   user_id = doc["user_id"].as<String>();
 }
 
 void provision()
 {
-  DEBUG.println("\n[Provision] Starting wifiManager");
+  DEBUG.println("[Provision] Starting WifiManager");
   delay(300);
   ticker.attach(0.6, tick);
 
@@ -218,11 +230,18 @@ void provision()
   }
 
   wifiManager.setConfigPortalTimeout(10 * 60 * 60);
+  //wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(apConfigSaveCallback);
-  wifiManager.autoConnect(AP_NAME);
+  if (!wifiManager.autoConnect(AP_NAME))
+  {
+    Serial.println("[Provision] Failed to connect and hit timeout");
+    ESP.deepSleep(0);
+    delay(1000);
+  }
 
-  debug("[Provision] Timed Out");
-  ESP.deepSleep(0);
+  ESP.restart();
+  while (1)
+    ;
 }
 
 //called when wifimanger config is saved
@@ -238,17 +257,18 @@ void apConfigSaveCallback()
 
   if (response.code != -1)
   {
-    // payload will contain userID, store it in FS
+    debug("[PROVISION] User found");
+    user_id = response.payload;
+
     StaticJsonDocument<100> fsDoc;
     fsDoc["device_id"] = device_id;
-    fsDoc["user_id"] = response.payload;
+    fsDoc["user_id"] = user_id;
+
     File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
     serializeJson(fsDoc, configFile);
     configFile.close();
-    delay(1000);
-    user_id = response.payload;
+
     publishDeviceStatus();
-    debug("[PROVISION] Success");
 
     ticker.detach();
     digitalWrite(STATUS_LED, LOW);
@@ -257,6 +277,9 @@ void apConfigSaveCallback()
   {
     debug("[PROVISION] Failed to find user", true);
     debug(response.payload, true);
+    ticker.detach();
+    ticker.attach(0.05, tick);
+    delay(5000);
   }
 }
 
@@ -279,10 +302,11 @@ void loop()
     debug("[LOOP] User_id is null");
   }
 
-  //Wifi.end();
-  //System.sleep(SLEEP_MODE_DEEP,60*15);  //15 mins
-
-  delay(15000);
+  // WiFiM.end();
+  // System.sleep(SLEEP_MODE_DEEP,30);  //15 mins
+  debug("Sleeping");
+  system_deep_sleep_instant(30 *1000 * 1000); //30 Seconds
+  delay(2000);
 }
 
 void publishTemperature()
@@ -363,32 +387,68 @@ APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 
 void connectToWifi(String ssid, String password)
 {
-  debug("Connecting to Wifi.");
+  DEBUG.print("Connecting to Wifi... ");
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED)
   {
     delay(300);
   };
-  debug("Connected.");
+  DEBUG.println("Connected.");
 }
 
 void device_Maintance()
 {
-  if (rebootsSinceLastDevicePost == PUBLISH_DEVICE_CYCLES)
+  rtcCounter counter = readRtcCounter();
+
+  if (counter.bootCount >= PUBLISH_DEVICE_CYCLES)
   {
-    rebootsSinceLastDevicePost = 0;
+    counter.bootCount = 0;
+    writeRtcCounter(counter);
+
     publishDeviceStatus();
     ota_update();
   }
+  // inc Bootcounter
+  uint32_t x = ++counter.bootCount;
+  counter.bootCount = x;
+  writeRtcCounter(counter);
+}
 
-  rebootsSinceLastDevicePost++;
+rtcCounter readRtcCounter()
+{
+  DEBUG.print("[RTC Read] ");
+  rtcCounter counter;
+  ESP.rtcUserMemoryRead(RTC_COUNTER_ADDRESS, &counter.signature, sizeof(uint32_t));
+  ESP.rtcUserMemoryRead(RTC_COUNTER_ADDRESS + sizeof(uint32_t), &counter.bootCount, sizeof(uint32_t));
+  // Is it valid?
+  if (counter.signature == RTC_COUNTER_SIGNATURE)
+  {
+    DEBUG.print("Valid.  Current Count: ");
+    DEBUG.println(counter.bootCount);
+  }
+  else
+  {
+    DEBUG.println("Invaid Signature, resetting to 0");
+    counter.signature = RTC_COUNTER_SIGNATURE;
+    counter.bootCount = 0;
+  }
+  return counter;
+}
+
+void writeRtcCounter(rtcCounter counter)
+{
+  DEBUG.print("[RTC Write] ");
+  counter.signature = RTC_COUNTER_SIGNATURE;
+  ESP.rtcUserMemoryWrite(RTC_COUNTER_ADDRESS, &counter.signature, sizeof(uint32_t));
+  ESP.rtcUserMemoryWrite(RTC_COUNTER_ADDRESS + sizeof(uint32_t), &counter.bootCount, sizeof(uint32_t));
+  DEBUG.println("Done");
 }
 
 void ota_update()
 {
   String downloadUrl = getDownloadUrl();
   if (downloadUrl.length() > 0)
-    downloadUpdate(downloadUrl);
+    installUpdate(downloadUrl);
 }
 
 String getDownloadUrl()
@@ -429,7 +489,7 @@ String getDownloadUrl()
   return returnString;
 }
 
-bool downloadUpdate(String url)
+bool installUpdate(String url)
 {
   StaticJsonDocument<200> doc;
   deserializeJson(doc, url);
@@ -478,13 +538,9 @@ bool downloadUpdate(String url)
   {
     debug("Update successfully completed. Rebooting.", true);
     delay(2000);
-    WiFi.forceSleepBegin();
-    wdt_reset();
-    ESP.reset();
+    ESP.restart();
     while (1)
-      wdt_reset();
-    //ESP.reset();
-    //delay(2000);
+      ;
     return true;
   }
 
