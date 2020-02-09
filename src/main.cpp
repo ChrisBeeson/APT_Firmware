@@ -93,7 +93,7 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\n\n%s %s 0.1.24\n", PRODUCT, VERSION);
+  DEBUG.printf("\n\n%s %s\n", PRODUCT, VERSION);
   //rst_info *rinfo = ESP.getResetInfoPtr();
   //Serial.print(String("\nResetInfo.reason = ") + (*rinfo).reason + ": " + ESP.getResetReason() + "\n");
 
@@ -305,16 +305,17 @@ void loop()
   // WiFiM.end();
   // System.sleep(SLEEP_MODE_DEEP,30);  //15 mins
   debug("Sleeping");
-  system_deep_sleep_instant(30 *1000 * 1000); //30 Seconds
+  system_deep_sleep_instant(30 * 1000 * 1000); //30 Seconds
   delay(2000);
 }
 
 void publishTemperature()
 {
-  dallas_sensors.requestTemperatures();
-
   String JSONmessage;
   StaticJsonDocument<400> doc;
+
+  dallas_sensors.requestTemperatures();
+
   doc["user_id"] = user_id;
   doc["device_id"] = device_id;
   doc["product"] = PRODUCT;
@@ -330,6 +331,7 @@ void publishDeviceStatus()
 {
   StaticJsonDocument<400> doc;
   String JSONmessage;
+
   doc["user_id"] = user_id;
   doc["device_id"] = device_id;
   doc["product"] = PRODUCT;
@@ -344,11 +346,13 @@ void publishDeviceStatus()
 
 APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
 {
+  APIResponse response;
+  HTTPClient https;
+  BearSSL::WiFiClientSecure secureClient;
+
 #ifdef DEBUG_MODE
   digitalWrite(STATUS_LED, HIGH);
 #endif
-
-  APIResponse response;
 
   if (WiFi.status() != WL_CONNECTED)
   {
@@ -357,8 +361,6 @@ APIResponse HttpJSONStringToEndPoint(String JSONString, const char *endPoint)
     return response;
   }
 
-  HTTPClient https;
-  BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
   https.begin(secureClient, API_SERVER_URL, 443, endPoint, true);
   https.addHeader("Content-Type", "application/json");
@@ -416,8 +418,9 @@ void device_Maintance()
 
 rtcCounter readRtcCounter()
 {
-  DEBUG.print("[RTC Read] ");
   rtcCounter counter;
+
+  DEBUG.print("[RTC Read] ");
   ESP.rtcUserMemoryRead(RTC_COUNTER_ADDRESS, &counter.signature, sizeof(uint32_t));
   ESP.rtcUserMemoryRead(RTC_COUNTER_ADDRESS + sizeof(uint32_t), &counter.bootCount, sizeof(uint32_t));
   // Is it valid?
@@ -492,10 +495,11 @@ String getDownloadUrl()
 bool installUpdate(String url)
 {
   StaticJsonDocument<200> doc;
-  deserializeJson(doc, url);
-
   HTTPClient https;
   BearSSL::WiFiClientSecure secureClient;
+
+  deserializeJson(doc, url);
+
   secureClient.setInsecure();
   https.begin(secureClient, doc["baseURL"], 443, doc["path"], true);
 
