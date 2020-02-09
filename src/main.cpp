@@ -93,7 +93,7 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\n\n%s %s\n", PRODUCT, VERSION);
+  DEBUG.printf("\n\n%s %s\n REALLY 0.1.26", PRODUCT, VERSION);
   //rst_info *rinfo = ESP.getResetInfoPtr();
   //Serial.print(String("\nResetInfo.reason = ") + (*rinfo).reason + ": " + ESP.getResetReason() + "\n");
 
