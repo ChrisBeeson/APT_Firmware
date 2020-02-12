@@ -32,7 +32,7 @@
 #define AP_NAME "Pool Thermometer"
 #define WATER_TEMP_SENSOR "water_temp"
 
-#define PUBLISH_DEVICE_CYCLES 3 // number of restarts before publishing device status
+#define PUBLISH_DEVICE_CYCLES 2 // number of restarts before publishing device status
 #define RTC_COUNTER_SIGNATURE 0xD0D01234
 #define RTC_COUNTER_ADDRESS 0
 
@@ -93,7 +93,7 @@ void setup()
   Serial.begin(115200);
   delay(350);
   setChipString();
-  DEBUG.printf("\n\n%s %s\n REALLY 0.1.26", PRODUCT, VERSION);
+  DEBUG.printf("\n%s %s\n\n", PRODUCT, VERSION);
   //rst_info *rinfo = ESP.getResetInfoPtr();
   //Serial.print(String("\nResetInfo.reason = ") + (*rinfo).reason + ": " + ESP.getResetReason() + "\n");
 
@@ -102,7 +102,7 @@ void setup()
   digitalWrite(STATUS_LED, HIGH);
 #endif
 
-  SPIFFS.begin() ? DEBUG.println("[Setup] FS - Started") : DEBUG.println("[Setup] FS - ERROR");
+  SPIFFS.begin() ? DEBUG.println("[Setup] FS Started") : DEBUG.println("[Setup] FS ERROR");
 
 #ifdef TOTAL_RESET
   {
@@ -125,6 +125,7 @@ void setup()
 
   DEBUG.print("[Setup] Connecting to Wifi.");
   WiFiManager wifiManager;
+  wifiManager.autoConnect();
 
   int i = 0;
   while (WiFi.status() != WL_CONNECTED)
@@ -229,14 +230,15 @@ void provision()
     delay(1000);
   }
 
-  wifiManager.setConfigPortalTimeout(10 * 60 * 60);
+  wifiManager.setConfigPortalTimeout(60);
   //wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(apConfigSaveCallback);
   if (!wifiManager.autoConnect(AP_NAME))
   {
     Serial.println("[Provision] Failed to connect and hit timeout");
-    ESP.deepSleep(0);
+    wifiManager.resetSettings();
     delay(1000);
+    wifiManager.autoConnect(AP_NAME);
   }
 
   ESP.restart();
@@ -305,7 +307,7 @@ void loop()
   // WiFiM.end();
   // System.sleep(SLEEP_MODE_DEEP,30);  //15 mins
   debug("Sleeping");
-  system_deep_sleep_instant(30 * 1000 * 1000); //30 Seconds
+  system_deep_sleep_instant(5000 * 1000); //30 Seconds
   delay(2000);
 }
 
