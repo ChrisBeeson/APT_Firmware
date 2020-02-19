@@ -16,6 +16,7 @@
 #include <DallasTemperature.h>
 #include <OneWire.h>
 #include <Ticker.h>
+#include <DoubleResetDetector.h>
 
 #define FIRMWARE_URL "/getFirmwareDownloadUrl"
 #define API_SERVER_URL "us-central1-chas-c2689.cloudfunctions.net" //TODO: move to config file
@@ -36,13 +37,17 @@
 #define RTC_COUNTER_SIGNATURE 0xD0D01234
 #define RTC_COUNTER_ADDRESS 0
 
+#define DRD_TIMEOUT 10    // 10 sec timeout to recognise a double reset
+#define DRD_ADDRESS 64
+
 #define DEBUG_UPDATER Serial
 #define DEBUG Serial
 //#define DEBUG_MODE
-//#define TOTAL_RESET
+//#define TOTAL_RESETv
 
 OneWire oneWire(TEMP_SENSOR_PIN);
 DallasTemperature dallas_sensors(&oneWire);
+DoubleResetDetector drd(DRD_TIMEOUT, DRD_ADDRESS);
 Ticker ticker;
 char device_chipId[13];
 String device_id;
@@ -86,6 +91,7 @@ void ota_update();
 void configModeCallback(WiFiManager *myWiFiManager);
 rtcCounter readRtcCounter();
 void writeRtcCounter(rtcCounter counter);
+void rollbackToProvision();
 
 void setup()
 {
@@ -94,15 +100,14 @@ void setup()
   delay(350);
   setChipString();
   DEBUG.printf("\n%s %s\n\n", PRODUCT, VERSION);
-  //rst_info *rinfo = ESP.getResetInfoPtr();
-  //Serial.print(String("\nResetInfo.reason = ") + (*rinfo).reason + ": " + ESP.getResetReason() + "\n");
+
+// Start file system
+  SPIFFS.begin() ? DEBUG.println("[Setup] FS Started") : DEBUG.println("[Setup] FS ERROR");
 
 #ifdef DEBUG_MODE
   ticker.attach(0.2, tick);
   digitalWrite(STATUS_LED, HIGH);
 #endif
-
-  SPIFFS.begin() ? DEBUG.println("[Setup] FS Started") : DEBUG.println("[Setup] FS ERROR");
 
 #ifdef TOTAL_RESET
   {
@@ -122,6 +127,14 @@ void setup()
 
   if (user_id == nullptr || user_id == "null")
     provision();
+
+// is this a second reset in a short amount of time?  
+// If so, wipe user_id falling back to provision mode
+  if (drd.detectDoubleReset()) {
+    Serial.println("[SETUP] Double Reset Detected");
+    drd.stop();
+    rollbackToProvision();
+  }
 
   DEBUG.print("[Setup] Connecting to Wifi.");
   WiFiManager wifiManager;
@@ -166,7 +179,7 @@ void onboard()
   int vcc = analogRead(BATT_ADC_PIN);
 
   String JSONmessage;
-  DynamicJsonDocument doc(400);
+  StaticJsonDocument<400> doc;
   doc["product"] = PRODUCT;
   doc["chip_id"] = device_chipId;
   doc[WATER_TEMP_SENSOR] = temp;
@@ -193,6 +206,29 @@ void onboard()
   SPIFFS.end();
   debug("[Onboarding] SUCCESS!");
   ESP.deepSleep(0);
+}
+
+void rollbackToProvision() {
+  debug("[RE-PROVISION] Started");
+  ticker.attach(0.1, tick);
+
+  // Delete config.json
+  SPIFFS.remove(CONFIG_FILENAME);
+  delay(100);
+
+  // rewrite with just device_id
+     StaticJsonDocument<100> fsDoc;
+    fsDoc["device_id"] = device_id;
+    File configFile = SPIFFS.open(CONFIG_FILENAME, "w");
+    serializeJson(fsDoc, configFile);
+    configFile.close();
+
+  // reset wifi details.
+    WiFiManager wifiManager;
+    wifiManager.resetSettings();
+
+    ESP.restart();
+    delay(100);
 }
 
 void loadConfig()
@@ -231,8 +267,8 @@ void provision()
   }
 
   wifiManager.setConfigPortalTimeout(60);
-  //wifiManager.setAPCallback(configModeCallback);
   wifiManager.setSaveConfigCallback(apConfigSaveCallback);
+
   if (!wifiManager.autoConnect(AP_NAME))
   {
     Serial.println("[Provision] Failed to connect and hit timeout");
@@ -242,8 +278,7 @@ void provision()
   }
 
   ESP.restart();
-  while (1)
-    ;
+  while (1);
 }
 
 //called when wifimanger config is saved
@@ -294,6 +329,8 @@ void configModeCallback(WiFiManager *myWiFiManager)
 
 void loop()
 {
+  drd.loop();
+
   if (user_id != "null")
   {
     publishTemperature();
@@ -303,10 +340,8 @@ void loop()
   {
     debug("[LOOP] User_id is null");
   }
-
-  // WiFiM.end();
-  // System.sleep(SLEEP_MODE_DEEP,30);  //15 mins
-  debug("Sleeping");
+  drd.stop();
+  debug("[LOOP] Sleeping");
   system_deep_sleep_instant(5000 * 1000); //30 Seconds
   delay(2000);
 }
